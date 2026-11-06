@@ -9,6 +9,7 @@ module.exports = {
   P07: { nombre: "Puma de prueba", tipo: "unidad", especie: "animal", clase: "comun", alineamiento: "peon", movil: true, ataque: 2, defensa: 1, pv: 1 },
   P08: { nombre: "Rey de prueba", tipo: "unidad", especie: "humano", clase: "imperial", alineamiento: "lider", movil: true, ataque: 6, defensa: 6, pv: 5, costo: { alimento: 3, capital: 3, creencia: 3 } },
   P09: { nombre: "Explorador de prueba", tipo: "unidad", especie: "humano", clase: "comun", alineamiento: "peon", movil: true, ataque: 2, defensa: 3, pv: 1 },
+  P10: { nombre: "Demoledor de prueba", tipo: "unidad", especie: "humano", clase: "especial", alineamiento: "belico", movil: true, ataque: 4, defensa: 2, pv: 2, acciones: ["demoledor"] },
   S01: { nombre: "Espíritu de prueba", tipo: "unidad", especie: "sobrenatural", clase: "especial", sobrenatural: true, movil: true, ataque: 5, defensa: 5, pv: 3, costo: { creencia: 4 } },
   S02: { nombre: "Sombra de prueba", tipo: "unidad", especie: "sobrenatural", clase: "especial", sobrenatural: true, movil: true, ataque: 4, defensa: 2, pv: 2, costo: { creencia: 2 } },
   E01: { nombre: "Muralla de prueba", tipo: "estructura", movil: false, ataque: 0, defensa: 5, pv: 2, genera: { capital: 2 } },
