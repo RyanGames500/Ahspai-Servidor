@@ -1,0 +1,353 @@
+// Pruebas del motor:  node prueba.js
+"use strict";
+const M = require("./motor.js");
+const cartas = require("./cartas_prueba.js");
+
+let pasaron = 0, fallaron = 0;
+function prueba(nombre, fn) {
+  try { fn(); pasaron++; console.log("  OK   " + nombre); }
+  catch (e) { fallaron++; console.log("  FALLO " + nombre + "\n        " + e.message); }
+}
+function igual(a, b, msg) { if (a !== b) throw new Error(`${msg}: esperaba ${JSON.stringify(b)} y fue ${JSON.stringify(a)}`); }
+function ok(r, msg) { if (!r.ok) throw new Error(`${msg}: ${r.error}`); return r; }
+
+const rep = (id, n) => Array(n).fill(id);
+const MAZO = () => ({
+  principal: [...rep("P01", 4), ...rep("P02", 4), ...rep("P03", 4), ...rep("P04", 4), ...rep("P05", 3), ...rep("P06", 3), ...rep("P07", 4), "P08", ...rep("P09", 4)], // 31
+  sobrenatural: ["S01", "S01", "S02"],
+  recursos: [...rep("E01", 3), ...rep("E02", 3), ...rep("E03", 2), ...rep("E04", 2)], // 10
+});
+
+function nueva(modo, n) {
+  const g = M.crearPartida({ modo, jugadores: Array.from({ length: n }, (_, i) => ({ id: 100 + i, mazo: MAZO() })) }, cartas);
+  for (let i = 0; i < n; i++) ok(M.jugar(g, i, { tipo: "mano_inicial", de_recursos: 1 }), "mano inicial");
+  return g;
+}
+// Pone una carta directo en el campo (para armar situaciones de prueba)
+function poner(g, asiento, id, zona, casilla, pos) {
+  const inst = { uid: g.sigUid++, carta: id, dueno: asiento, origen: "principal", pos, herida: 0, contusion: 0, ataco: false, salioDeReserva: false };
+  g.jugadores[asiento][zona][casilla] = inst;
+  return inst;
+}
+function irABatalla(g) {
+  ok(M.jugar(g, g.actual, { tipo: "robar", mazo: "principal" }), "robar");
+  ok(M.jugar(g, g.actual, { tipo: "ir_batalla" }), "ir a batalla");
+}
+
+console.log("\nValidación de mazos");
+prueba("mazo de prueba es válido", () => igual(M.validarMazo(MAZO(), cartas), null, "error"));
+prueba("rechaza 5 copias de un peón", () => {
+  const m = MAZO(); m.principal.push("P01");
+  if (!M.validarMazo(m, cartas).startsWith("demasiadas_copias")) throw new Error("no lo rechazó");
+});
+prueba("rechaza 2 líderes", () => {
+  const m = MAZO(); m.principal.push("P08");
+  if (!M.validarMazo(m, cartas)) throw new Error("no lo rechazó");
+});
+prueba("rechaza mazo principal de 29", () => {
+  const m = MAZO(); m.principal = m.principal.slice(0, 29);
+  if (!M.validarMazo(m, cartas)) throw new Error("no lo rechazó");
+});
+
+console.log("\nInicio");
+prueba("todos empiezan con 5 y el primero roba la 6ta", () => {
+  const g = nueva("1v1", 2);
+  igual(g.jugadores[0].mano.length, 5, "mano j0");
+  igual(g.jugadores[1].mano.length, 5, "mano j1");
+  igual(g.etapa, "robo", "etapa");
+  ok(M.jugar(g, 0, { tipo: "robar", mazo: "recursos" }), "robar");
+  igual(g.jugadores[0].mano.length, 6, "mano j0 tras robar");
+});
+prueba("recursos iniciales 4/4/4", () => {
+  const g = nueva("1v1", 2);
+  igual(JSON.stringify(g.equipos[0].recursos), JSON.stringify({ alimento: 4, capital: 4, creencia: 4 }), "recursos");
+});
+prueba("no puedes jugar si no es tu turno", () => {
+  const g = nueva("1v1", 2);
+  igual(M.jugar(g, 1, { tipo: "robar" }).error, "no_es_tu_turno", "error");
+});
+
+console.log("\nBajar y recursos");
+prueba("máximo 2 bajadas por turno", () => {
+  const g = nueva("1v1", 2);
+  const j = g.jugadores[0];
+  j.mano = [];
+  for (let i = 0; i < 3; i++) j.mano.push({ uid: g.sigUid++, carta: "P01", dueno: 0, origen: "principal", pos: "atk", herida: 0, contusion: 0 });
+  ok(M.jugar(g, 0, { tipo: "robar" }), "robar");
+  ok(M.jugar(g, 0, { tipo: "bajar", uid: j.mano[0].uid, casilla: 0 }), "bajada 1");
+  ok(M.jugar(g, 0, { tipo: "bajar", uid: j.mano[0].uid, casilla: 1 }), "bajada 2");
+  igual(M.jugar(g, 0, { tipo: "bajar", uid: j.mano[0].uid, casilla: 2 }).error, "limite_de_bajadas", "tercera");
+});
+prueba("cobra el costo y no deja bajar sin recursos", () => {
+  const g = nueva("1v1", 2);
+  const j = g.jugadores[0];
+  const rey = { uid: g.sigUid++, carta: "P08", dueno: 0, origen: "principal", pos: "atk", herida: 0, contusion: 0 };
+  const guerrero = { uid: g.sigUid++, carta: "P05", dueno: 0, origen: "principal", pos: "atk", herida: 0, contusion: 0 };
+  j.mano.push(rey, guerrero);
+  ok(M.jugar(g, 0, { tipo: "robar" }), "robar");
+  ok(M.jugar(g, 0, { tipo: "bajar", uid: guerrero.uid, casilla: 0 }), "guerrero");
+  igual(g.equipos[0].recursos.capital, 2, "capital tras pagar 2");
+  igual(M.jugar(g, 0, { tipo: "bajar", uid: rey.uid, casilla: 1 }).error, "falta_capital", "rey");
+});
+prueba("unidad que genera suma al bajar", () => {
+  const g = nueva("1v1", 2);
+  const granjero = { uid: g.sigUid++, carta: "P03", dueno: 0, origen: "principal", pos: "atk", herida: 0, contusion: 0 };
+  g.jugadores[0].mano.push(granjero);
+  ok(M.jugar(g, 0, { tipo: "robar" }), "robar");
+  ok(M.jugar(g, 0, { tipo: "bajar", uid: granjero.uid, casilla: 0 }), "bajar");
+  igual(g.equipos[0].recursos.alimento, 5, "alimento");
+});
+prueba("estructura como recurso suma y va al reciclaje (sin límite)", () => {
+  const g = nueva("1v1", 2);
+  const j = g.jugadores[0];
+  const a = { uid: g.sigUid++, carta: "E01", dueno: 0, origen: "recursos" }, b = { uid: g.sigUid++, carta: "E01", dueno: 0, origen: "recursos" }, c = { uid: g.sigUid++, carta: "E02", dueno: 0, origen: "recursos" };
+  j.mano.push(a, b, c);
+  ok(M.jugar(g, 0, { tipo: "robar" }), "robar");
+  for (const x of [a, b, c]) ok(M.jugar(g, 0, { tipo: "jugar_recurso", uid: x.uid }), "recurso");
+  igual(g.equipos[0].recursos.capital, 8, "capital");
+  igual(g.equipos[0].recursos.creencia, 6, "creencia");
+  igual(j.reciclaje.length, 3, "reciclaje");
+});
+prueba("estructura bajada va a la zona defensiva y no genera", () => {
+  const g = nueva("1v1", 2);
+  const m = { uid: g.sigUid++, carta: "E01", dueno: 0, origen: "recursos" };
+  g.jugadores[0].mano.push(m);
+  ok(M.jugar(g, 0, { tipo: "robar" }), "robar");
+  ok(M.jugar(g, 0, { tipo: "bajar", uid: m.uid, casilla: 1, pos: "def" }), "bajar");
+  igual(g.jugadores[0].defensa[1].uid, m.uid, "en defensa");
+  igual(g.equipos[0].recursos.capital, 4, "capital sin cambio");
+});
+prueba("sobrenatural se baja desde su mazo", () => {
+  const g = nueva("1v1", 2);
+  const s = g.jugadores[0].sobrenatural.find((c) => c.carta === "S02");
+  ok(M.jugar(g, 0, { tipo: "robar" }), "robar");
+  ok(M.jugar(g, 0, { tipo: "bajar", desde: "sobrenatural", uid: s.uid, casilla: 0 }), "bajar");
+  igual(g.equipos[0].recursos.creencia, 2, "creencia pagada");
+});
+
+console.log("\nCombate (tabla del libro)");
+prueba("ataque > defensa: derrota y da sus puntos", () => {
+  const g = nueva("1v1", 2);
+  const a = poner(g, 0, "P05", "batalla", 0, "atk"); // atk 4
+  const d = poner(g, 1, "P09", "batalla", 0, "def"); // def 3, pv 1
+  irABatalla(g);
+  ok(M.jugar(g, 0, { tipo: "atacar", uid: a.uid, objetivo: d.uid }), "atacar");
+  igual(g.jugadores[1].batalla[0], null, "defensor fuera");
+  igual(g.jugadores[1].mausoleo.length, 1, "al mausoleo");
+  igual(g.equipos[0].pv, 1, "puntos");
+});
+prueba("ataque = defensa: unidad NO cae", () => {
+  const g = nueva("1v1", 2);
+  const a = poner(g, 0, "P02", "batalla", 0, "atk"); // atk 3
+  const d = poner(g, 1, "P09", "batalla", 0, "def"); // def 3
+  irABatalla(g);
+  ok(M.jugar(g, 0, { tipo: "atacar", uid: a.uid, objetivo: d.uid }), "atacar");
+  if (!g.jugadores[1].batalla[0]) throw new Error("no debió caer");
+});
+prueba("ataque = defensa: estructura SÍ cae", () => {
+  const g = nueva("1v1", 2);
+  const a = poner(g, 0, "P02", "batalla", 0, "atk"); // atk 3
+  const d = poner(g, 1, "E02", "defensa", 0, "def"); // def 3, pv 2
+  irABatalla(g);
+  ok(M.jugar(g, 0, { tipo: "atacar", uid: a.uid, objetivo: d.uid }), "atacar");
+  igual(g.jugadores[1].defensa[0], null, "estructura fuera");
+  igual(g.equipos[0].pv, 2, "puntos");
+});
+prueba("ataque vs ataque igual: caen las dos y ambos ganan puntos", () => {
+  const g = nueva("1v1", 2);
+  const a = poner(g, 0, "P01", "batalla", 0, "atk");
+  const d = poner(g, 1, "P07", "batalla", 0, "atk");
+  irABatalla(g);
+  ok(M.jugar(g, 0, { tipo: "atacar", uid: a.uid, objetivo: d.uid }), "atacar");
+  igual(g.jugadores[0].batalla[0], null, "atacante fuera");
+  igual(g.jugadores[1].batalla[0], null, "defensor fuera");
+  igual(g.equipos[0].pv, 1, "pv j0");
+  igual(g.equipos[1].pv, 1, "pv j1");
+});
+prueba("ataque menor al ataque rival: cae el atacante", () => {
+  const g = nueva("1v1", 2);
+  const a = poner(g, 0, "P01", "batalla", 0, "atk"); // 2
+  poner(g, 1, "P05", "batalla", 0, "atk");           // 4
+  irABatalla(g);
+  ok(M.jugar(g, 0, { tipo: "atacar", uid: a.uid, objetivo: g.jugadores[1].batalla[0].uid }), "atacar");
+  igual(g.jugadores[0].batalla[0], null, "atacante fuera");
+  igual(g.equipos[1].pv, 1, "puntos del defensor");
+});
+prueba("no hay ataque directo si el rival tiene cartas", () => {
+  const g = nueva("1v1", 2);
+  const a = poner(g, 0, "P05", "batalla", 0, "atk");
+  poner(g, 1, "E01", "defensa", 0, "def");
+  irABatalla(g);
+  igual(M.jugar(g, 0, { tipo: "atacar", uid: a.uid, jugador: 1 }).error, "primero_limpia_su_campo", "error");
+});
+prueba("ataque directo da 1 punto", () => {
+  const g = nueva("1v1", 2);
+  const a = poner(g, 0, "P05", "batalla", 0, "atk");
+  irABatalla(g);
+  ok(M.jugar(g, 0, { tipo: "atacar", uid: a.uid, jugador: 1 }), "atacar");
+  igual(g.equipos[0].pv, 1, "pv");
+});
+prueba("cada carta ataca una vez y la batalla no se repite", () => {
+  const g = nueva("1v1", 2);
+  const a = poner(g, 0, "P05", "batalla", 0, "atk");
+  irABatalla(g);
+  ok(M.jugar(g, 0, { tipo: "atacar", uid: a.uid, jugador: 1 }), "atacar");
+  igual(M.jugar(g, 0, { tipo: "atacar", uid: a.uid, jugador: 1 }).error, "ya_ataco", "segundo ataque");
+  ok(M.jugar(g, 0, { tipo: "ir_nucleo2" }), "nucleo2");
+  igual(M.jugar(g, 0, { tipo: "ir_batalla" }).error, "solo_desde_nucleo1", "volver a batalla");
+  igual(M.jugar(g, 0, { tipo: "cambiar", uid: a.uid, pos: "def" }).error, "ya_ataco_este_turno", "cambiar tras atacar");
+});
+prueba("carta en defensa no puede atacar", () => {
+  const g = nueva("1v1", 2);
+  const a = poner(g, 0, "P05", "batalla", 0, "def");
+  irABatalla(g);
+  igual(M.jugar(g, 0, { tipo: "atacar", uid: a.uid, jugador: 1 }).error, "debe_estar_en_ataque", "error");
+});
+
+console.log("\nReserva, mulligan, mano");
+prueba("reserva: solo común humano/animal, y no la que atacó", () => {
+  const g = nueva("1v1", 2);
+  const comun = poner(g, 0, "P01", "batalla", 0, "atk");
+  const especial = poner(g, 0, "P05", "batalla", 1, "atk");
+  ok(M.jugar(g, 0, { tipo: "robar" }), "robar");
+  igual(M.jugar(g, 0, { tipo: "a_reserva", uid: especial.uid }).error, "solo_humano_o_animal_comun", "especial");
+  ok(M.jugar(g, 0, { tipo: "a_reserva", uid: comun.uid }), "comun");
+  igual(g.jugadores[0].reserva.length, 1, "en reserva");
+  ok(M.jugar(g, 0, { tipo: "desde_reserva", uid: comun.uid, casilla: 2 }), "volver");
+  igual(M.jugar(g, 0, { tipo: "a_reserva", uid: comun.uid }).error, "salio_de_reserva_este_turno", "otra vez");
+});
+prueba("inmóvil no cambia de posición", () => {
+  const g = nueva("1v1", 2);
+  const guardia = poner(g, 0, "P04", "batalla", 0, "def");
+  ok(M.jugar(g, 0, { tipo: "robar" }), "robar");
+  igual(M.jugar(g, 0, { tipo: "cambiar", uid: guardia.uid, pos: "atk" }).error, "carta_inmovil", "error");
+});
+prueba("mulligan da 1 punto a CADA rival (ffa de 4)", () => {
+  const g = nueva("ffa", 4);
+  ok(M.jugar(g, 0, { tipo: "robar" }), "robar");
+  ok(M.jugar(g, 0, { tipo: "mulligan", uid: g.jugadores[0].mano[0].uid }), "mulligan");
+  igual(g.equipos[1].pv + g.equipos[2].pv + g.equipos[3].pv, 3, "puntos repartidos");
+  igual(g.equipos[0].pv, 0, "yo no gano");
+  igual(g.jugadores[0].mano.length, 6, "mano igual");
+});
+prueba("máximo 3 mulligans por turno", () => {
+  const g = nueva("1v1", 2);
+  ok(M.jugar(g, 0, { tipo: "robar" }), "robar");
+  for (let i = 0; i < 3; i++) ok(M.jugar(g, 0, { tipo: "mulligan", uid: g.jugadores[0].mano[0].uid }), "mulligan");
+  igual(M.jugar(g, 0, { tipo: "mulligan", uid: g.jugadores[0].mano[0].uid }).error, "limite_de_mulligan", "cuarto");
+});
+prueba("con más de 10 en mano no puedes terminar el turno", () => {
+  const g = nueva("1v1", 2);
+  const j = g.jugadores[0];
+  for (let i = 0; i < 6; i++) j.mano.push({ uid: g.sigUid++, carta: "P01", dueno: 0, origen: "principal" });
+  ok(M.jugar(g, 0, { tipo: "robar" }), "robar"); // 12
+  igual(M.jugar(g, 0, { tipo: "terminar_turno" }).error, "descarta_hasta_10", "terminar");
+  ok(M.jugar(g, 0, { tipo: "descartar", uid: j.mano[0].uid }), "descartar");
+  ok(M.jugar(g, 0, { tipo: "descartar", uid: j.mano[0].uid }), "descartar");
+  ok(M.jugar(g, 0, { tipo: "terminar_turno" }), "terminar");
+  igual(g.actual, 1, "turno del otro");
+});
+
+console.log("\nModos y final");
+prueba("llegar a 30 puntos gana", () => {
+  const g = nueva("1v1", 2);
+  g.equipos[0].pv = 29;
+  const a = poner(g, 0, "P05", "batalla", 0, "atk");
+  irABatalla(g);
+  const r = ok(M.jugar(g, 0, { tipo: "atacar", uid: a.uid, jugador: 1 }), "atacar");
+  igual(g.fase, "terminada", "fase");
+  igual(g.ganador, 0, "ganador");
+  if (!r.eventos.some((e) => e.tipo === "fin")) throw new Error("falta evento fin");
+});
+prueba("2v2: compañeros comparten recursos y puntos, turnos alternan equipos", () => {
+  const g = nueva("2v2", 4);
+  igual(g.jugadores[0].equipo, g.jugadores[2].equipo, "0 y 2 juntos");
+  igual(g.jugadores[1].equipo, g.jugadores[3].equipo, "1 y 3 juntos");
+  igual(Object.keys(g.equipos).length, 2, "dos equipos");
+  const granjero = { uid: g.sigUid++, carta: "P03", dueno: 0, origen: "principal" };
+  g.jugadores[0].mano.push(granjero);
+  ok(M.jugar(g, 0, { tipo: "robar" }), "robar");
+  ok(M.jugar(g, 0, { tipo: "bajar", uid: granjero.uid, casilla: 0 }), "bajar");
+  igual(g.equipos[g.jugadores[2].equipo].recursos.alimento, 5, "el compañero ve el alimento");
+  ok(M.jugar(g, 0, { tipo: "terminar_turno" }), "fin");
+  igual(g.jugadores[g.actual].equipo, 1, "le toca al otro equipo");
+});
+prueba("2v2: no puedes atacar a tu compañero", () => {
+  const g = nueva("2v2", 4);
+  const a = poner(g, 0, "P05", "batalla", 0, "atk");
+  const aliado = poner(g, 2, "P01", "batalla", 0, "atk");
+  irABatalla(g);
+  igual(M.jugar(g, 0, { tipo: "atacar", uid: a.uid, objetivo: aliado.uid }).error, "no_puedes_atacar_a_tu_equipo", "error");
+});
+prueba("ffa: eliges a qué rival atacar", () => {
+  const g = nueva("ffa", 3);
+  const a = poner(g, 0, "P05", "batalla", 0, "atk");
+  poner(g, 1, "P01", "batalla", 0, "def");
+  irABatalla(g);
+  ok(M.jugar(g, 0, { tipo: "atacar", uid: a.uid, jugador: 2 }), "directo al 2 que tiene el campo vacío");
+  igual(g.equipos[0].pv, 1, "pv");
+});
+prueba("ffa: si uno se rinde, siguen los demás; el último gana", () => {
+  const g = nueva("ffa", 3);
+  ok(M.jugar(g, 1, { tipo: "rendirse" }), "rinde 1");
+  igual(g.fase, "jugando", "sigue");
+  ok(M.jugar(g, 2, { tipo: "rendirse" }), "rinde 2");
+  igual(g.ganador, 0, "gana 0");
+});
+
+console.log("\nLo escondido");
+prueba("no ves la mano ni los mazos del rival", () => {
+  const g = nueva("1v1", 2);
+  const v = M.vistaPara(g, 0);
+  if (!Array.isArray(v.jugadores[0].mano)) throw new Error("mi mano debería verse");
+  igual(typeof v.jugadores[1].mano, "number", "mano rival solo cantidad");
+  igual(typeof v.jugadores[1].principal, "number", "mazo rival solo cantidad");
+  const txt = JSON.stringify(v);
+  for (const c of g.jugadores[1].mano) if (txt.includes(`"uid":${c.uid},`)) throw new Error("se filtró una carta del rival");
+});
+prueba("el robo solo le dice la carta a quien roba", () => {
+  const g = nueva("1v1", 2);
+  const r = ok(M.jugar(g, 0, { tipo: "robar" }), "robar");
+  const paraMi = M.eventosPara(r.eventos, 0).find((e) => e.tipo === "robo");
+  const paraEl = M.eventosPara(r.eventos, 1).find((e) => e.tipo === "robo");
+  if (!paraMi.carta) throw new Error("yo debería ver la carta");
+  if (paraEl.carta || paraEl.uid) throw new Error("el rival no debería verla");
+});
+
+console.log("\nPartida completa al azar (busca errores raros)");
+prueba("500 partidas con jugadas al azar no se rompen", () => {
+  for (let p = 0; p < 500; p++) {
+    const modo = ["1v1", "ffa", "2v2"][p % 3];
+    const g = nueva(modo, modo === "1v1" ? 2 : modo === "ffa" ? 3 + (p % 2) : 4);
+    let pasos = 0;
+    while (g.fase !== "terminada" && pasos++ < 4000) {
+      const s = g.ataque ? g.ataque.defensores[0] : g.actual;
+      const j = g.jugadores[s];
+      const opciones = [
+        { tipo: "robar", mazo: Math.random() < 0.3 ? "recursos" : "principal" },
+        ...j.mano.map((c) => ({ tipo: "bajar", uid: c.uid, casilla: Math.floor(Math.random() * 5), pos: Math.random() < 0.6 ? "atk" : "def" })),
+        ...j.mano.map((c) => ({ tipo: "jugar_recurso", uid: c.uid })),
+        { tipo: "ir_batalla" },
+        ...j.batalla.filter(Boolean).map((c) => {
+          const rs = g.jugadores.filter((o) => o.equipo !== j.equipo && !o.eliminado);
+          const r = rs[Math.floor(Math.random() * rs.length)];
+          const objs = [...r.batalla, ...r.defensa].filter(Boolean);
+          return objs.length ? { tipo: "atacar", uid: c.uid, objetivo: objs[0].uid } : { tipo: "atacar", uid: c.uid, jugador: r.asiento };
+        }),
+        { tipo: "ir_nucleo2" },
+        { tipo: "terminar_turno" },
+        ...(j.mano.length > 10 ? [{ tipo: "descartar", uid: j.mano[0].uid }] : []),
+      ];
+      M.jugar(g, s, opciones[Math.floor(Math.random() * opciones.length)]);
+      // Nada se duplica ni se pierde: cada jugador sigue con todas sus cartas
+      if (pasos % 50 === 0) for (const x of g.jugadores) {
+        const total = x.principal.length + x.recursos.length + x.sobrenatural.length + x.mano.length + x.reserva.length + x.mausoleo.length + x.reciclaje.length
+          + x.batalla.filter(Boolean).length + x.defensa.filter(Boolean).length;
+        if (total !== 44) throw new Error(`partida ${p}: el jugador ${x.asiento} tiene ${total} cartas en vez de 44`);
+      }
+    }
+  }
+});
+
+console.log(`\n${pasaron} pasaron, ${fallaron} fallaron\n`);
+process.exit(fallaron ? 1 : 0);
