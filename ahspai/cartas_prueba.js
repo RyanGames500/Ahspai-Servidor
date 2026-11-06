@@ -1,0 +1,18 @@
+// Cartas INVENTADAS solo para probar el motor. Se cambian por las 160 reales después.
+module.exports = {
+  P01: { nombre: "Soldado de prueba", tipo: "unidad", especie: "humano", clase: "comun", alineamiento: "peon", movil: true, ataque: 2, defensa: 2, pv: 1 },
+  P02: { nombre: "Lobo de prueba", tipo: "unidad", especie: "animal", clase: "comun", alineamiento: "peon", movil: true, ataque: 3, defensa: 1, pv: 1 },
+  P03: { nombre: "Granjero de prueba", tipo: "unidad", especie: "humano", clase: "comun", alineamiento: "peon", movil: true, ataque: 1, defensa: 2, pv: 1, genera: { alimento: 1 } },
+  P04: { nombre: "Guardia de prueba", tipo: "unidad", especie: "humano", clase: "comun", alineamiento: "peon", movil: false, ataque: 1, defensa: 4, pv: 1 },
+  P05: { nombre: "Guerrero de prueba", tipo: "unidad", especie: "humano", clase: "especial", alineamiento: "belico", movil: true, ataque: 4, defensa: 3, pv: 2, costo: { capital: 2 } },
+  P06: { nombre: "Héroe de prueba", tipo: "unidad", especie: "humano", clase: "especial", alineamiento: "heroe", movil: true, ataque: 5, defensa: 4, pv: 3, costo: { capital: 2, creencia: 2 } },
+  P07: { nombre: "Puma de prueba", tipo: "unidad", especie: "animal", clase: "comun", alineamiento: "peon", movil: true, ataque: 2, defensa: 1, pv: 1 },
+  P08: { nombre: "Rey de prueba", tipo: "unidad", especie: "humano", clase: "imperial", alineamiento: "lider", movil: true, ataque: 6, defensa: 6, pv: 5, costo: { alimento: 3, capital: 3, creencia: 3 } },
+  P09: { nombre: "Explorador de prueba", tipo: "unidad", especie: "humano", clase: "comun", alineamiento: "peon", movil: true, ataque: 2, defensa: 3, pv: 1 },
+  S01: { nombre: "Espíritu de prueba", tipo: "unidad", especie: "sobrenatural", clase: "especial", sobrenatural: true, movil: true, ataque: 5, defensa: 5, pv: 3, costo: { creencia: 4 } },
+  S02: { nombre: "Sombra de prueba", tipo: "unidad", especie: "sobrenatural", clase: "especial", sobrenatural: true, movil: true, ataque: 4, defensa: 2, pv: 2, costo: { creencia: 2 } },
+  E01: { nombre: "Muralla de prueba", tipo: "estructura", movil: false, ataque: 0, defensa: 5, pv: 2, genera: { capital: 2 } },
+  E02: { nombre: "Templo de prueba", tipo: "estructura", movil: false, ataque: 0, defensa: 3, pv: 2, genera: { creencia: 2 } },
+  E03: { nombre: "Granero de prueba", tipo: "estructura", movil: false, ataque: 0, defensa: 3, pv: 2, genera: { alimento: 2 } },
+  E04: { nombre: "Mercado de prueba", tipo: "estructura", movil: false, ataque: 0, defensa: 2, pv: 1, genera: { capital: 1, alimento: 1 } },
+};
