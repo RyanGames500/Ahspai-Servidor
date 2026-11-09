@@ -24,7 +24,22 @@ const CARTAS = require("./ahspai/cartas.js"); // las 62 cartas reales (cartas_pr
 const TAM = { "1v1": 2, ffa3: 3, ffa4: 4, "2v2": 4 };
 const partidas = new Map(); // sala -> { g, asientos: Map(idJugador -> asiento), modo }
 const CUENTAS = require("./ahspai/cuentas.js"); // usuarios, colección, monedas... (Neon)
+const RAREZAS = require("./ahspai/rarezas.js");
+
+// Manda el catálogo de cartas (con su rareza) en pedacitos chicos, para el menú y la colección
+function ahspaiEnviarCatalogo(api, pid) {
+  const claves = Object.keys(CARTAS);
+  for (let i = 0; i < claves.length; i += 6) {
+    const parte = {};
+    for (const k of claves.slice(i, i + 6)) parte[k] = { ...CARTAS[k], rareza: RAREZAS[k] || "comun" };
+    api.sendTo(pid, "ahspai_catalogo", { parte, total: claves.length });
+  }
+}
 const sesiones = new Map();  // idJugador -> usuario con el que entró
+const mazosSesion = new Map(); // idJugador -> mazo activo listo para jugar (o nada = mazo de prueba)
+// ¿Está en línea / jugando este usuario?
+function pidsDe(usuario) { const out = []; for (const [pid, u] of sesiones) if (u === usuario) out.push(pid); return out; }
+function enPartida(pid) { for (const pt of partidas.values()) if (pt.g.fase !== "terminada" && pt.asientos.has(pid)) return true; return false; }
 const intentos = new Map();  // idJugador -> { n, desde } (para frenar a quien prueba contraseñas)
 CUENTAS.iniciar().catch(() => {}); // conecta a la base al arrancar (si falla, reintenta luego)
 
@@ -35,6 +50,15 @@ function demasiadosIntentos(pid) {
   i.n++;
   intentos.set(pid, i);
   return i.n > 8; // más de 8 intentos por minuto
+}
+
+// Guarda el mazo activo de esa sesión (para la partida) y no lo manda al juego
+function conMazo(pid, r) {
+  if (r && "mazo" in r) {
+    if (r.mazo) mazosSesion.set(pid, r.mazo); else mazosSesion.delete(pid);
+    delete r.mazo;
+  }
+  return r;
 }
 
 // Al terminar la partida: monedas y estadísticas a cada jugador con cuenta (una sola vez)
@@ -100,7 +124,7 @@ function ahspaiEmpezar(api, sala, modo, puntos) {
   if (!TAM[modo]) return "modo_invalido";
   if (jugadores.length !== TAM[modo]) return `faltan_jugadores_${jugadores.length}_de_${TAM[modo]}`;
   const g = motor.crearPartida(
-    { modo: modo.startsWith("ffa") ? "ffa" : modo, puntos: Number(puntos) || 30, jugadores: jugadores.map((p) => ({ id: p.id, mazo: mazoPrueba() })) },
+    { modo: modo.startsWith("ffa") ? "ffa" : modo, puntos: Number(puntos) || 30, jugadores: jugadores.map((p) => ({ id: p.id, mazo: mazosSesion.get(p.id) || mazoPrueba() })) },
     CARTAS
   );
   const asientos = new Map(jugadores.map((p, i) => [p.id, i]));
@@ -141,6 +165,7 @@ module.exports = {
 
   onDisconnect(api, p) {
     sesiones.delete(p.id);
+    mazosSesion.delete(p.id);
     intentos.delete(p.id);
   },
 
@@ -190,17 +215,56 @@ module.exports = {
           ? await CUENTAS.crear(data?.usuario, data?.clave)
           : await CUENTAS.entrar(data?.usuario, data?.clave);
         sesiones.set(p.id, r.perfil.usuario);
+        conMazo(p.id, r);
+        ahspaiEnviarCatalogo(api, p.id);
         return r;
       }
       if (name === "cuenta_token") {
         if (demasiadosIntentos(p.id)) throw new Error("espera_un_minuto");
         const r = await CUENTAS.conToken(data?.token);
         sesiones.set(p.id, r.perfil.usuario);
+        conMazo(p.id, r);
+        ahspaiEnviarCatalogo(api, p.id);
         return r;
       }
       const usuario = sesiones.get(p.id);
       if (!usuario) throw new Error("no_has_entrado");
       if (name === "cuenta_perfil") return await CUENTAS.verPerfil(usuario);
+      if (name === "cuenta_coleccion") return await CUENTAS.verColeccion(usuario);
+      // Mazos
+      if (name === "cuenta_mazos") return await CUENTAS.verMazos(usuario);
+      if (name === "cuenta_guardar_mazo") return conMazo(p.id, await CUENTAS.guardarMazo(usuario, data?.slot, data?.mazo));
+      if (name === "cuenta_borrar_mazo") return conMazo(p.id, await CUENTAS.borrarMazo(usuario, data?.slot));
+      if (name === "cuenta_activar_mazo") return conMazo(p.id, await CUENTAS.activarMazo(usuario, data?.slot));
+      // Tienda y perfil
+      if (name === "cuenta_comprar") return await CUENTAS.comprarSobre(usuario, String(data?.sobre || ""));
+      if (name === "cuenta_foto") return await CUENTAS.cambiarFoto(usuario, String(data?.carta || ""));
+      if (name === "cuenta_ver_perfil") return await CUENTAS.perfilPublico(data?.usuario);
+      // Amigos
+      if (name === "cuenta_amigos") {
+        const r = await CUENTAS.listaAmigos(usuario);
+        for (const a of r.amigos) { const ps = pidsDe(a.usuario); a.en_linea = ps.length > 0; a.en_partida = ps.some(enPartida); }
+        return r;
+      }
+      if (name === "cuenta_solicitar") {
+        const r = await CUENTAS.solicitar(usuario, data?.usuario);
+        for (const pid of pidsDe(String(data?.usuario || "").toLowerCase())) api.sendTo(pid, "ahspai_aviso_amigos", {});
+        return r;
+      }
+      if (name === "cuenta_responder") return await CUENTAS.responder(usuario, data?.usuario, !!data?.aceptar);
+      if (name === "cuenta_quitar_amigo") return await CUENTAS.quitarAmigo(usuario, data?.usuario);
+      if (name === "cuenta_invitar") {
+        const otro = String(data?.usuario || "").toLowerCase();
+        if (!(await CUENTAS.sonAmigos(usuario, otro))) throw new Error("no_son_amigos");
+        const ps = pidsDe(otro).filter((x) => !enPartida(x));
+        if (!ps.length) throw new Error("tu_amigo_no_esta_disponible");
+        const letras = "ABCDEFGHJKLMNPQRSTUVWXYZ";
+        let codigo = "";
+        for (let i = 0; i < 4; i++) codigo += letras[Math.floor(Math.random() * letras.length)];
+        const yo = await CUENTAS.verPerfil(usuario);
+        for (const pid of ps) api.sendTo(pid, "ahspai_invitacion", { de: yo.nombre, codigo, puntos: Number(data?.puntos) || 30 });
+        return { codigo };
+      }
       if (name === "cuenta_salir") { sesiones.delete(p.id); await CUENTAS.salir(usuario, data?.token); return ""; }
       throw new Error("pregunta_desconocida");
     }
