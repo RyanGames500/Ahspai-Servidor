@@ -173,12 +173,12 @@ prueba("ataque menor al ataque rival: cae el atacante", () => {
   igual(g.jugadores[0].batalla[0], null, "atacante fuera");
   igual(g.equipos[1].pv, 1, "puntos del defensor");
 });
-prueba("no hay ataque directo si el rival tiene cartas", () => {
+prueba("no hay ataque directo si el rival tiene estructuras", () => {
   const g = nueva("1v1", 2);
   const a = poner(g, 0, "P05", "batalla", 0, "atk");
   poner(g, 1, "E01", "defensa", 0, "def");
   irABatalla(g);
-  igual(M.jugar(g, 0, { tipo: "atacar", uid: a.uid, jugador: 1 }).error, "primero_limpia_su_campo", "error");
+  igual(M.jugar(g, 0, { tipo: "atacar", uid: a.uid, jugador: 1 }).error, "primero_derrota_sus_estructuras", "error");
 });
 prueba("ataque directo da 1 punto", () => {
   const g = nueva("1v1", 2);
@@ -213,8 +213,8 @@ prueba("reserva: solo común humano/animal, y no la que atacó", () => {
   igual(M.jugar(g, 0, { tipo: "a_reserva", uid: especial.uid }).error, "solo_humano_o_animal_comun", "especial");
   ok(M.jugar(g, 0, { tipo: "a_reserva", uid: comun.uid }), "comun");
   igual(g.jugadores[0].reserva.length, 1, "en reserva");
-  ok(M.jugar(g, 0, { tipo: "desde_reserva", uid: comun.uid, casilla: 2 }), "volver");
-  igual(M.jugar(g, 0, { tipo: "a_reserva", uid: comun.uid }).error, "salio_de_reserva_este_turno", "otra vez");
+  // Regla nueva (9 nov): no se puede sacar en el mismo turno que entró
+  igual(M.jugar(g, 0, { tipo: "desde_reserva", uid: comun.uid, casilla: 2 }).error, "espera_un_turno_para_sacarla", "volver el mismo turno");
 });
 prueba("inmóvil no cambia de posición", () => {
   const g = nueva("1v1", 2);
@@ -312,6 +312,105 @@ prueba("el robo solo le dice la carta a quien roba", () => {
   const paraEl = M.eventosPara(r.eventos, 1).find((e) => e.tipo === "robo");
   if (!paraMi.carta) throw new Error("yo debería ver la carta");
   if (paraEl.carta || paraEl.uid) throw new Error("el rival no debería verla");
+});
+
+
+console.log("\nCambios de Ryan (6 nov)");
+prueba("estructuras: solo se atacan cuando el rival ya no tiene unidades", () => {
+  const g = nueva("1v1", 2);
+  const a = poner(g, 0, "P05", "batalla", 0, "atk");
+  poner(g, 1, "P01", "batalla", 0, "def");
+  const muro = poner(g, 1, "E02", "defensa", 0, "def");
+  irABatalla(g);
+  igual(M.jugar(g, 0, { tipo: "atacar", uid: a.uid, objetivo: muro.uid }).error, "primero_derrota_sus_unidades", "error");
+});
+prueba("estructuras: sin unidades rivales sí se pueden atacar", () => {
+  const g = nueva("1v1", 2);
+  const a = poner(g, 0, "P05", "batalla", 0, "atk");
+  const muro = poner(g, 1, "E02", "defensa", 0, "def");
+  irABatalla(g);
+  ok(M.jugar(g, 0, { tipo: "atacar", uid: a.uid, objetivo: muro.uid }), "atacar estructura");
+  igual(g.jugadores[1].defensa[0], null, "cayó");
+});
+prueba("Demoledor: ataca estructuras aunque haya unidades, y directo si no hay estructuras", () => {
+  const g = nueva("1v1", 2);
+  const d = poner(g, 0, "P10", "batalla", 0, "atk");
+  const d2 = poner(g, 0, "P10", "batalla", 1, "atk");
+  poner(g, 1, "P01", "batalla", 0, "def");
+  const muro = poner(g, 1, "E04", "defensa", 0, "def");
+  irABatalla(g);
+  igual(M.jugar(g, 0, { tipo: "atacar", uid: d.uid, jugador: 1 }).error, "primero_derrota_sus_estructuras", "directo con estructura");
+  ok(M.jugar(g, 0, { tipo: "atacar", uid: d.uid, objetivo: muro.uid }), "estructura");
+  ok(M.jugar(g, 0, { tipo: "atacar", uid: d2.uid, jugador: 1 }), "directo con unidades pero sin estructuras");
+});
+prueba("cambiar ATK/DEF solo una vez por turno", () => {
+  const g = nueva("1v1", 2);
+  const a = poner(g, 0, "P01", "batalla", 0, "atk");
+  ok(M.jugar(g, 0, { tipo: "robar" }), "robar");
+  ok(M.jugar(g, 0, { tipo: "cambiar", uid: a.uid, pos: "def" }), "1er cambio");
+  igual(M.jugar(g, 0, { tipo: "cambiar", uid: a.uid, pos: "atk" }).error, "ya_cambio_de_posicion_este_turno", "2do cambio");
+  ok(M.jugar(g, 0, { tipo: "cambiar", uid: a.uid, zona: "batalla", casilla: 3 }), "moverla de casilla sí se puede");
+});
+prueba("descartar solo si tienes más de 10", () => {
+  const g = nueva("1v1", 2);
+  ok(M.jugar(g, 0, { tipo: "robar" }), "robar");
+  igual(M.jugar(g, 0, { tipo: "descartar", uid: g.jugadores[0].mano[0].uid }).error, "solo_si_tienes_mas_de_10", "error");
+});
+prueba("reserva la ven todos; sobrenatural solo el dueño", () => {
+  const g = nueva("1v1", 2);
+  g.jugadores[1].reserva.push({ uid: g.sigUid++, carta: "P01", dueno: 1, origen: "principal" });
+  const v = M.vistaPara(g, 0);
+  if (!Array.isArray(v.jugadores[1].reserva)) throw new Error("debería ver la reserva del rival");
+  igual(typeof v.jugadores[1].sobrenatural, "number", "sobrenatural rival escondido");
+  if (!Array.isArray(v.jugadores[0].sobrenatural)) throw new Error("mi sobrenatural debería verse");
+});
+console.log("\nCambios de Ryan (9 nov)");
+prueba("no se ataca estructura si tiene unidades en su zona de batalla", () => {
+  const g = nueva("1v1", 2);
+  const a = poner(g, 0, "P05", "batalla", 0, "atk");
+  poner(g, 1, "P01", "batalla", 0, "atk");
+  const muro = poner(g, 1, "E01", "defensa", 0, "def");
+  irABatalla(g);
+  igual(M.jugar(g, 0, { tipo: "atacar", uid: a.uid, objetivo: muro.uid }).error, "primero_derrota_sus_unidades", "estructura");
+});
+prueba("no se ataca directo si tiene unidades en su zona de batalla", () => {
+  const g = nueva("1v1", 2);
+  const a = poner(g, 0, "P05", "batalla", 0, "atk");
+  poner(g, 1, "P01", "batalla", 2, "atk");
+  irABatalla(g);
+  igual(M.jugar(g, 0, { tipo: "atacar", uid: a.uid, jugador: 1 }).error, "primero_derrota_sus_unidades", "directo");
+});
+prueba("sin unidades en batalla ya se puede atacar la estructura", () => {
+  const g = nueva("1v1", 2);
+  const a = poner(g, 0, "P05", "batalla", 0, "atk");
+  const muro = poner(g, 1, "E01", "defensa", 0, "def");
+  irABatalla(g);
+  ok(M.jugar(g, 0, { tipo: "atacar", uid: a.uid, objetivo: muro.uid }), "estructura");
+});
+prueba("reserva: se puede sacar recién en el turno siguiente", () => {
+  const g = nueva("1v1", 2);
+  const comun = poner(g, 0, "P01", "batalla", 0, "atk");
+  ok(M.jugar(g, 0, { tipo: "robar" }), "robar");
+  ok(M.jugar(g, 0, { tipo: "a_reserva", uid: comun.uid }), "a reserva");
+  ok(M.jugar(g, 0, { tipo: "terminar_turno" }), "fin turno 0");
+  ok(M.jugar(g, 1, { tipo: "robar" }), "robar 1");
+  ok(M.jugar(g, 1, { tipo: "terminar_turno" }), "fin turno 1");
+  ok(M.jugar(g, 0, { tipo: "robar" }), "robar 0");
+  ok(M.jugar(g, 0, { tipo: "desde_reserva", uid: comun.uid, casilla: 2 }), "sacar");
+});
+prueba("partida a 20 puntos: se gana al llegar a 20", () => {
+  const g = M.crearPartida({ modo: "1v1", puntos: 20, jugadores: [0, 1].map((i) => ({ id: 100 + i, mazo: MAZO() })) }, cartas);
+  for (let i = 0; i < 2; i++) ok(M.jugar(g, i, { tipo: "mano_inicial", de_recursos: 1 }), "mano inicial");
+  igual(M.vistaPara(g, 0).puntos, 20, "puntos en la vista");
+  g.equipos[0].pv = 19;
+  const a = poner(g, 0, "P05", "batalla", 0, "atk");
+  irABatalla(g);
+  ok(M.jugar(g, 0, { tipo: "atacar", uid: a.uid, jugador: 1 }), "directo");
+  igual(g.ganador, 0, "ganó con 20");
+});
+prueba("puntos raros quedan en 30", () => {
+  const g = M.crearPartida({ modo: "1v1", puntos: 7, jugadores: [0, 1].map((i) => ({ id: 100 + i, mazo: MAZO() })) }, cartas);
+  igual(g.puntos, 30, "por defecto");
 });
 
 console.log("\nPartida completa al azar (busca errores raros)");

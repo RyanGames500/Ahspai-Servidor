@@ -53,20 +53,31 @@ function ahspaiEnviarEstado(api, sala, eventos) {
   }
 }
 
-function ahspaiEmpezar(api, sala, modo) {
+// Manda el inicio: primero quién eres, luego las cartas en pedacitos chicos (el celular no recibe bien mensajes grandes)
+function ahspaiEnviarInicio(api, pid, asiento, modo) {
+  const claves = Object.keys(CARTAS);
+  api.sendTo(pid, "ahspai_inicio", { asiento, modo, total: claves.length });
+  for (let i = 0; i < claves.length; i += 6) {
+    const parte = {};
+    for (const k of claves.slice(i, i + 6)) parte[k] = CARTAS[k];
+    api.sendTo(pid, "ahspai_cartas", { parte });
+  }
+}
+
+function ahspaiEmpezar(api, sala, modo, puntos) {
   const viejo = partidas.get(sala);
   if (viejo && viejo.g.fase !== "terminada") return "ya_hay_partida";
   const jugadores = api.playersInRoom(AHSPAI, sala).sort((a, b) => a.slot - b.slot);
   if (!TAM[modo]) return "modo_invalido";
   if (jugadores.length !== TAM[modo]) return `faltan_jugadores_${jugadores.length}_de_${TAM[modo]}`;
   const g = motor.crearPartida(
-    { modo: modo.startsWith("ffa") ? "ffa" : modo, jugadores: jugadores.map((p) => ({ id: p.id, mazo: mazoPrueba() })) },
+    { modo: modo.startsWith("ffa") ? "ffa" : modo, puntos: Number(puntos) || 30, jugadores: jugadores.map((p) => ({ id: p.id, mazo: mazoPrueba() })) },
     CARTAS
   );
   const asientos = new Map(jugadores.map((p, i) => [p.id, i]));
   partidas.set(sala, { g, asientos, modo });
   api.log(`[Ahspai] Partida ${modo} en "${sala}": ${jugadores.map((p) => p.id).join(", ")}`);
-  for (const [pid, asiento] of asientos) api.sendTo(pid, "ahspai_inicio", { asiento, modo, cartas: CARTAS });
+  for (const [pid, asiento] of asientos) ahspaiEnviarInicio(api, pid, asiento, modo);
   ahspaiEnviarEstado(api, sala, []);
   return null;
 }
@@ -90,8 +101,9 @@ module.exports = {
   onJoinRoom(api, p, roomId) {
     // Partida rápida: cuando la sala del matchmaking se llena, empieza sola
     if (p.gameId !== AHSPAI) return;
-    const m = /^match_ahspai_(1v1|ffa3|ffa4|2v2)_/.exec(roomId);
-    if (m && api.playersInRoom(AHSPAI, roomId).length === TAM[m[1]]) ahspaiEmpezar(api, roomId, m[1]);
+    // La sala se llama match_ahspai_<modo>_p<puntos>_<n> (los puntos van en el modo del matchmaking)
+    const m = /^match_ahspai_(1v1|ffa3|ffa4|2v2)_(?:p(16|20|25|30)_)?/.exec(roomId);
+    if (m && api.playersInRoom(AHSPAI, roomId).length === TAM[m[1]]) ahspaiEmpezar(api, roomId, m[1], m[2]);
   },
 
   onLeaveRoom(api, p, roomId) {
@@ -105,8 +117,17 @@ module.exports = {
     if (p.gameId === AHSPAI) {
       if (name === "ahspai_empezar") {
         if (api.hostOf(AHSPAI, p.roomId) !== p.id) return api.sendTo(p.id, "ahspai_error", { error: "solo_el_host_puede_empezar" });
-        const error = ahspaiEmpezar(api, p.roomId, String(data?.modo || ""));
+        const error = ahspaiEmpezar(api, p.roomId, String(data?.modo || ""), data?.puntos);
         if (error) api.sendTo(p.id, "ahspai_error", { error });
+        return;
+      }
+      if (name === "ahspai_pedir_inicio") {
+        // El jugador no recibió el mensaje de inicio (pasa a veces en el celular): se lo mandamos otra vez
+        const pt = partidas.get(p.roomId);
+        const asiento = pt && pt.asientos.get(p.id);
+        if (asiento === undefined) return;
+        ahspaiEnviarInicio(api, p.id, asiento, pt.modo);
+        api.sendTo(p.id, "ahspai_estado", { vista: motor.vistaPara(pt.g, asiento), eventos: [] });
         return;
       }
       if (name === "ahspai_jugada") {
