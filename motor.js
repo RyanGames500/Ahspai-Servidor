@@ -110,6 +110,7 @@ function crearPartida(config, cartas) {
     cont: null,
     ataque: null,         // ataque esperando respuesta del defensor
     ganador: null,        // número de equipo
+    puntos: [16, 20, 25, 30].includes(Number(config.puntos)) ? Number(config.puntos) : REGLAS.puntosParaGanar, // puntos para ganar
     sigUid: 1,
   };
 
@@ -159,8 +160,14 @@ function enCampo(g, j, tipo) {
   return [...j.batalla, ...j.defensa].filter((c) => c && carta(g, c).tipo === tipo);
 }
 // ¿Se puede atacar directo a este rival? Normal: campo vacío. Demoledor: basta con que no tenga estructuras.
+// Unidades del rival en su zona de batalla (son las que bloquean atacar estructuras o directo)
+function unidadesEnBatalla(g, j) {
+  return j.batalla.filter((c) => c && carta(g, c).tipo === "unidad");
+}
 function puedeAtacarDirecto(g, rival, demoledor) {
-  return demoledor ? enCampo(g, rival, "estructura").length === 0 : campoVacio(rival);
+  const sinEstructuras = enCampo(g, rival, "estructura").length === 0;
+  // Demoledor: basta con que no tenga estructuras. Normal: sin unidades en batalla y sin estructuras.
+  return demoledor ? sinEstructuras : (sinEstructuras && unidadesEnBatalla(g, rival).length === 0);
 }
 function rivales(g, j) {
   return g.jugadores.filter((o) => o.equipo !== j.equipo && !o.eliminado);
@@ -180,7 +187,7 @@ function darPuntos(g, equipo, cantidad, ev, motivo) {
   if (cantidad <= 0 || g.fase === "terminada") return;
   g.equipos[equipo].pv += cantidad;
   ev.push({ tipo: "puntos", equipo, cantidad, total: g.equipos[equipo].pv, motivo });
-  if (g.equipos[equipo].pv >= REGLAS.puntosParaGanar) terminar(g, equipo, ev, "puntos");
+  if (g.equipos[equipo].pv >= g.puntos) terminar(g, equipo, ev, "puntos");
 }
 function terminar(g, equipo, ev, motivo) {
   if (g.fase === "terminada") return;
@@ -469,6 +476,7 @@ function jugar(g, asiento, accion) {
       if (inst.salioDeReserva) return mal("salio_de_reserva_este_turno");
       j[lugar.zona][lugar.casilla] = null;
       limpiarInst(inst);
+      inst.entroReserva = g.turno; // no se puede sacar en este mismo turno
       j.reserva.push(inst);
       g.cont.retiradas++;
       ev.push({ tipo: "a_reserva", jugador: j.asiento, uid: inst.uid });
@@ -481,6 +489,7 @@ function jugar(g, asiento, accion) {
       if (g.cont.desdeReserva >= REGLAS.desdeReservaPorTurno) return mal("limite_desde_reserva");
       const inst = j.reserva.find((c) => c.uid === accion.uid);
       if (!inst) return mal("carta_no_esta");
+      if (inst.entroReserva === g.turno) return mal("espera_un_turno_para_sacarla");
       const zona = accion.zona === "defensa" ? "defensa" : "batalla";
       const casilla = Math.floor(Number(accion.casilla));
       if (!(casilla >= 0 && casilla < j[zona].length)) return mal("casilla_invalida");
@@ -517,7 +526,10 @@ function jugar(g, asiento, accion) {
       if (accion.jugador !== undefined) {
         rival = g.jugadores[Number(accion.jugador)];
         if (!rival || rival.equipo === j.equipo || rival.eliminado) return mal("rival_invalido");
-        if (!puedeAtacarDirecto(g, rival, demoledor)) return mal(demoledor ? "primero_derrota_sus_estructuras" : "primero_limpia_su_campo");
+        if (!puedeAtacarDirecto(g, rival, demoledor)) {
+          if (!demoledor && unidadesEnBatalla(g, rival).length > 0) return mal("primero_derrota_sus_unidades");
+          return mal("primero_derrota_sus_estructuras");
+        }
         ataque = { atacante: atacante.uid, directo: rival.asiento, demoledor };
       } else {
         const lugarD = buscarEnCampo(g, accion.objetivo);
@@ -525,7 +537,8 @@ function jugar(g, asiento, accion) {
         rival = lugarD.jug;
         if (rival.equipo === j.equipo) return mal("no_puedes_atacar_a_tu_equipo");
         // Las estructuras solo se atacan cuando el rival ya no tiene unidades (salvo Demoledor)
-        if (carta(g, lugarD.inst).tipo === "estructura" && !demoledor && enCampo(g, rival, "unidad").length > 0) return mal("primero_derrota_sus_unidades");
+        // Las estructuras solo se atacan cuando el rival ya no tiene unidades en su zona de batalla (salvo Demoledor)
+        if (carta(g, lugarD.inst).tipo === "estructura" && !demoledor && unidadesEnBatalla(g, rival).length > 0) return mal("primero_derrota_sus_unidades");
         ataque = { atacante: atacante.uid, objetivo: lugarD.inst.uid };
       }
       // Defienden el atacado y, en 2v2, su compañero
@@ -584,7 +597,7 @@ function vistaCarta(g, inst) {
 function vistaPara(g, asiento) {
   return {
     modo: g.modo, fase: g.fase, turno: g.turno, actual: g.actual, etapa: g.etapa,
-    yo: asiento, ganador: g.ganador, contadores: g.cont,
+    yo: asiento, ganador: g.ganador, puntos: g.puntos, contadores: g.cont,
     ataque: g.ataque,
     equipos: g.equipos,
     jugadores: g.jugadores.map((j) => {
