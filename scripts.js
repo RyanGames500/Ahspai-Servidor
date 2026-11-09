@@ -23,6 +23,34 @@ const motor = require("./ahspai/motor.js");
 const CARTAS = require("./ahspai/cartas.js"); // las 62 cartas reales (cartas_prueba.js queda para las pruebas)
 const TAM = { "1v1": 2, ffa3: 3, ffa4: 4, "2v2": 4 };
 const partidas = new Map(); // sala -> { g, asientos: Map(idJugador -> asiento), modo }
+const CUENTAS = require("./ahspai/cuentas.js"); // usuarios, colección, monedas... (Neon)
+const sesiones = new Map();  // idJugador -> usuario con el que entró
+const intentos = new Map();  // idJugador -> { n, desde } (para frenar a quien prueba contraseñas)
+CUENTAS.iniciar().catch(() => {}); // conecta a la base al arrancar (si falla, reintenta luego)
+
+function demasiadosIntentos(pid) {
+  const ahora = Date.now();
+  const i = intentos.get(pid) || { n: 0, desde: ahora };
+  if (ahora - i.desde > 60000) { i.n = 0; i.desde = ahora; }
+  i.n++;
+  intentos.set(pid, i);
+  return i.n > 8; // más de 8 intentos por minuto
+}
+
+// Al terminar la partida: monedas y estadísticas a cada jugador con cuenta (una sola vez)
+function ahspaiPremiar(api, pt) {
+  if (pt.premiado || pt.g.fase !== "terminada") return;
+  pt.premiado = true;
+  for (const [pid, asiento] of pt.asientos) {
+    const usuario = sesiones.get(pid);
+    if (!usuario) continue;
+    const equipo = pt.g.jugadores[asiento].equipo;
+    const resultado = pt.g.ganador === null ? "empatada" : (pt.g.ganador === equipo ? "ganada" : "perdida");
+    CUENTAS.premiar(usuario, resultado)
+      .then((r) => { if (r) api.sendTo(pid, "ahspai_premio", { resultado, monedas: r.monedas, perfil: r.perfil }); })
+      .catch((e) => api.log("[Ahspai] No se pudo guardar el premio de " + usuario + ": " + e.message));
+  }
+}
 
 // Mazo PROVISIONAL con cartas reales para todos, mientras Ryan pasa los 2 mazos iniciales.
 // Copias: Peón 4, Bélico/Héroe 3, Líder 1, Sobrenatural 2, Estructura 3, el resto 3 (por confirmar).
@@ -51,6 +79,7 @@ function ahspaiEnviarEstado(api, sala, eventos) {
   for (const [pid, asiento] of pt.asientos) {
     api.sendTo(pid, "ahspai_estado", { vista: motor.vistaPara(pt.g, asiento), eventos: motor.eventosPara(eventos, asiento) });
   }
+  ahspaiPremiar(api, pt);
 }
 
 // Manda el inicio: primero quién eres, luego las cartas en pedacitos chicos (el celular no recibe bien mensajes grandes)
@@ -110,7 +139,10 @@ module.exports = {
     if (p.gameId === AHSPAI) ahspaiSalio(api, p, roomId);
   },
 
-  onDisconnect(api, p) {},
+  onDisconnect(api, p) {
+    sesiones.delete(p.id);
+    intentos.delete(p.id);
+  },
 
   // orb_send_server("evento", {datos})  (sin respuesta)
   onEvent(api, p, name, data) {
@@ -150,6 +182,28 @@ module.exports = {
 
   // orb_request_server("pregunta", {datos}, function(ok, respuesta) {...})  (con respuesta)
   async onRequest(api, p, name, data) {
+    // ---------- Cuentas de Ahspai ----------
+    if (p.gameId === AHSPAI && name.startsWith("cuenta_")) {
+      if (name === "cuenta_crear" || name === "cuenta_entrar") {
+        if (demasiadosIntentos(p.id)) throw new Error("espera_un_minuto");
+        const r = name === "cuenta_crear"
+          ? await CUENTAS.crear(data?.usuario, data?.clave)
+          : await CUENTAS.entrar(data?.usuario, data?.clave);
+        sesiones.set(p.id, r.perfil.usuario);
+        return r;
+      }
+      if (name === "cuenta_token") {
+        if (demasiadosIntentos(p.id)) throw new Error("espera_un_minuto");
+        const r = await CUENTAS.conToken(data?.token);
+        sesiones.set(p.id, r.perfil.usuario);
+        return r;
+      }
+      const usuario = sesiones.get(p.id);
+      if (!usuario) throw new Error("no_has_entrado");
+      if (name === "cuenta_perfil") return await CUENTAS.verPerfil(usuario);
+      if (name === "cuenta_salir") { sesiones.delete(p.id); await CUENTAS.salir(usuario, data?.token); return ""; }
+      throw new Error("pregunta_desconocida");
+    }
     if (name === "hora_servidor") return { hora: new Date().toISOString() };
     if (name === "sumar") return Number(data?.a || 0) + Number(data?.b || 0);
     throw new Error("pregunta_desconocida");
