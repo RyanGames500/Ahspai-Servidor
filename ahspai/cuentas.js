@@ -83,6 +83,8 @@ function iniciar() {
       datos JSONB NOT NULL,
       creado TIMESTAMPTZ NOT NULL DEFAULT now()
     )`);
+    // Versión de cada cuenta: si dos aparatos guardan a la vez, el segundo se reintenta en vez de pisar al primero
+    await pool.query("ALTER TABLE ahspai_cuentas ADD COLUMN IF NOT EXISTS ver INTEGER NOT NULL DEFAULT 0");
     console.log("[Ahspai] Base de datos Neon lista.");
   })().catch((e) => {
     console.log("[Ahspai] No se pudo conectar a la base de datos:", e.message);
@@ -93,30 +95,50 @@ function iniciar() {
 }
 
 // ---------- Guardar y leer ----------
+// En memoria se guardan copias (así se comporta igual que la base de datos)
+const copia = (f) => (f ? JSON.parse(JSON.stringify(f)) : null);
 async function leer(usuario) {
   await iniciar();
-  if (memoria) return memoria.get(usuario) || null;
-  const r = await pool.query("SELECT usuario, nombre, hash, sal, token, datos FROM ahspai_cuentas WHERE usuario = $1", [usuario]);
+  if (memoria) return copia(memoria.get(usuario));
+  const r = await pool.query("SELECT usuario, nombre, hash, sal, token, datos, ver FROM ahspai_cuentas WHERE usuario = $1", [usuario]);
   return r.rows[0] || null;
 }
 async function leerPorToken(tokenHash) {
   await iniciar();
-  if (memoria) { for (const f of memoria.values()) if ((f.datos.tokens || []).includes(tokenHash)) return f; return null; }
-  const r = await pool.query("SELECT usuario, nombre, hash, sal, token, datos FROM ahspai_cuentas WHERE datos->'tokens' ? $1", [tokenHash]);
+  if (memoria) { for (const f of memoria.values()) if ((f.datos.tokens || []).includes(tokenHash)) return copia(f); return null; }
+  const r = await pool.query("SELECT usuario, nombre, hash, sal, token, datos, ver FROM ahspai_cuentas WHERE datos->'tokens' ? $1", [tokenHash]);
   return r.rows[0] || null;
 }
 async function insertar(f) {
   await iniciar();
-  if (memoria) { if (memoria.has(f.usuario)) return false; memoria.set(f.usuario, f); return true; }
+  if (memoria) { if (memoria.has(f.usuario)) return false; memoria.set(f.usuario, copia({ ...f, ver: 0 })); return true; }
   const r = await pool.query(
     "INSERT INTO ahspai_cuentas (usuario, nombre, hash, sal, token, datos) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (usuario) DO NOTHING",
     [f.usuario, f.nombre, f.hash, f.sal, f.token, JSON.stringify(f.datos)]);
   return r.rowCount === 1;
 }
+// Guarda solo si nadie más guardó esa cuenta desde que la leímos; si no, avisa "conflicto"
 async function actualizar(f) {
   await iniciar();
-  if (memoria) { memoria.set(f.usuario, f); return; }
-  await pool.query("UPDATE ahspai_cuentas SET token = $2, datos = $3 WHERE usuario = $1", [f.usuario, f.token, JSON.stringify(f.datos)]);
+  const ver = f.ver || 0;
+  if (memoria) {
+    const actual = memoria.get(f.usuario);
+    if (!actual || (actual.ver || 0) !== ver) throw new Error("conflicto");
+    memoria.set(f.usuario, copia({ ...f, ver: ver + 1 }));
+    f.ver = ver + 1;
+    return;
+  }
+  const r = await pool.query("UPDATE ahspai_cuentas SET token = $2, datos = $3, ver = ver + 1 WHERE usuario = $1 AND ver = $4",
+    [f.usuario, f.token, JSON.stringify(f.datos), ver]);
+  if (r.rowCount !== 1) throw new Error("conflicto");
+  f.ver = ver + 1;
+}
+// Repite la operación (leyendo de nuevo) si hubo conflicto
+async function reintentar(fn) {
+  for (let i = 0; ; i++) {
+    try { return await fn(); }
+    catch (e) { if (e.message !== "conflicto" || i >= 4) throw e; await new Promise((r) => setTimeout(r, 30 + Math.random() * 70)); }
+  }
 }
 
 // ---------- Contraseñas y tokens ----------
@@ -252,7 +274,7 @@ function completar(f) {
   if (!d.creado) d.creado = new Date().toISOString();
 }
 
-async function entrar(usuario, clave) {
+async function _entrar(usuario, clave) {
   const f = await leer(String(usuario || "").trim().toLowerCase());
   if (!f) throw new Error("usuario_o_clave_incorrectos");
   const h = await hashClave(clave, f.sal);
@@ -263,7 +285,7 @@ async function entrar(usuario, clave) {
   return { token, perfil: perfil(f), mazo: mazoParaJugar(f.datos) };
 }
 
-async function conToken(token) {
+async function _conToken(token) {
   if (!token) throw new Error("sesion_vencida");
   const f = await leerPorToken(hashToken(token));
   if (!f) throw new Error("sesion_vencida");
@@ -274,7 +296,7 @@ async function conToken(token) {
 }
 
 // Cerrar sesión en este aparato: su token deja de servir
-async function salir(usuario, token) {
+async function _salir(usuario, token) {
   const f = await leer(usuario);
   if (!f) return;
   const h = hashToken(token);
@@ -296,7 +318,7 @@ async function verPerfil(usuario) {
 }
 
 // Al terminar una partida: monedas y estadísticas. resultado = "ganada" | "perdida" | "empatada"
-async function premiar(usuario, resultado) {
+async function _premiar(usuario, resultado) {
   const f = await leer(usuario);
   if (!f || !PREMIO[resultado]) return null;
   f.datos.monedas += PREMIO[resultado];
@@ -320,7 +342,7 @@ async function verMazos(usuario) {
   const f = await cargar(usuario);
   return { mazos: f.datos.mazos, activo: f.datos.activo, coleccion: f.datos.coleccion };
 }
-async function guardarMazo(usuario, slot, m) {
+async function _guardarMazo(usuario, slot, m) {
   slot = Math.floor(Number(slot));
   if (!(slot >= 0 && slot < 5)) throw new Error("espacio_invalido");
   const f = await cargar(usuario);
@@ -338,7 +360,7 @@ async function guardarMazo(usuario, slot, m) {
   await actualizar(f);
   return { mazos: f.datos.mazos, activo: f.datos.activo, problema: r.problema || "", perfil: perfil(f), mazo: mazoParaJugar(f.datos) };
 }
-async function borrarMazo(usuario, slot) {
+async function _borrarMazo(usuario, slot) {
   const f = await cargar(usuario);
   slot = Math.floor(Number(slot));
   if (!f.datos.mazos[slot]) throw new Error("espacio_vacio");
@@ -347,7 +369,7 @@ async function borrarMazo(usuario, slot) {
   await actualizar(f);
   return { mazos: f.datos.mazos, activo: f.datos.activo, perfil: perfil(f), mazo: mazoParaJugar(f.datos) };
 }
-async function activarMazo(usuario, slot) {
+async function _activarMazo(usuario, slot) {
   const f = await cargar(usuario);
   slot = Math.floor(Number(slot));
   const m = f.datos.mazos[slot];
@@ -370,7 +392,7 @@ function sacarCarta(pool) {
   }
   return pool[crypto.randomInt(pool.length)];
 }
-async function comprarSobre(usuario, tipo) {
+async function _comprarSobre(usuario, tipo) {
   if (!(tipo in SOBRES)) throw new Error("sobre_invalido");
   const f = await cargar(usuario);
   if (f.datos.monedas < SOBRE.precio) throw new Error("no_te_alcanzan_las_monedas");
@@ -389,7 +411,7 @@ async function comprarSobre(usuario, tipo) {
 }
 
 // ---------- Perfil ----------
-async function cambiarFoto(usuario, carta) {
+async function _cambiarFoto(usuario, carta) {
   const f = await cargar(usuario);
   const c = CARTAS[carta];
   if (!c || !(f.datos.coleccion[carta] > 0)) throw new Error("no_tienes_esa_carta");
@@ -404,7 +426,7 @@ async function perfilPublico(usuario) {
 }
 
 // ---------- Amigos ----------
-async function solicitar(usuario, otro) {
+async function _solicitar(usuario, otro) {
   otro = String(otro || "").trim().toLowerCase();
   if (!otro) throw new Error("escribe_un_usuario");
   if (otro === usuario) throw new Error("no_puedes_agregarte");
@@ -413,12 +435,12 @@ async function solicitar(usuario, otro) {
   if (!el) throw new Error("ese_usuario_no_existe");
   if ((yo.datos.amigos || []).includes(otro)) throw new Error("ya_son_amigos");
   // Si él ya me había mandado solicitud, quedan amigos de una
-  if ((yo.datos.solicitudes || []).includes(otro)) return responder(usuario, otro, true);
+  if ((yo.datos.solicitudes || []).includes(otro)) return _responder(usuario, otro, true);
   el.datos.solicitudes = [...new Set([...(el.datos.solicitudes || []), usuario])].slice(-50);
   await actualizar(el);
   return { enviada: true, nombre: el.nombre };
 }
-async function responder(usuario, otro, aceptar) {
+async function _responder(usuario, otro, aceptar) {
   otro = String(otro || "").toLowerCase();
   const yo = await cargar(usuario);
   yo.datos.solicitudes = (yo.datos.solicitudes || []).filter((x) => x !== otro);
@@ -434,7 +456,7 @@ async function responder(usuario, otro, aceptar) {
   await actualizar(yo);
   return { amigos: true, perfil: perfil(yo) };
 }
-async function quitarAmigo(usuario, otro) {
+async function _quitarAmigo(usuario, otro) {
   otro = String(otro || "").toLowerCase();
   const yo = await cargar(usuario);
   yo.datos.amigos = (yo.datos.amigos || []).filter((x) => x !== otro);
@@ -455,6 +477,21 @@ async function sonAmigos(usuario, otro) {
   const yo = await cargar(usuario);
   return (yo.datos.amigos || []).includes(String(otro || "").toLowerCase());
 }
+
+
+
+const entrar = (...a) => reintentar(() => _entrar(...a));
+const conToken = (...a) => reintentar(() => _conToken(...a));
+const salir = (...a) => reintentar(() => _salir(...a));
+const premiar = (...a) => reintentar(() => _premiar(...a));
+const guardarMazo = (...a) => reintentar(() => _guardarMazo(...a));
+const borrarMazo = (...a) => reintentar(() => _borrarMazo(...a));
+const activarMazo = (...a) => reintentar(() => _activarMazo(...a));
+const comprarSobre = (...a) => reintentar(() => _comprarSobre(...a));
+const cambiarFoto = (...a) => reintentar(() => _cambiarFoto(...a));
+const solicitar = (...a) => reintentar(() => _solicitar(...a));
+const responder = (...a) => reintentar(() => _responder(...a));
+const quitarAmigo = (...a) => reintentar(() => _quitarAmigo(...a));
 
 module.exports = {
   verMazos, guardarMazo, borrarMazo, activarMazo, mazoInicial, revisarMazo,

@@ -135,17 +135,63 @@ function ahspaiEmpezar(api, sala, modo, puntos) {
   return null;
 }
 
+// ---------- Reconexión ----------
+// Si alguien con cuenta se sale de una partida en curso (se le cayó el internet, cerró el juego...),
+// tiene ESPERA_VOLVER ms para volver a entrar con su cuenta. Si no vuelve, se rinde solo.
+const ESPERA_VOLVER = Number(process.env.AHSPAI_ESPERA_VOLVER) || 60000;
+
+function avisarSala(api, pt, evento, datos) {
+  for (const pid of pt.asientos.keys()) api.sendTo(pid, evento, datos);
+}
+
 function ahspaiSalio(api, p, sala) {
   const pt = partidas.get(sala);
   if (!pt) return;
   const asiento = pt.asientos.get(p.id);
   if (asiento !== undefined) {
-    // Por ahora, salirse = rendirse (volver a la partida llega después)
-    const r = motor.jugar(pt.g, asiento, { tipo: "rendirse" });
     pt.asientos.delete(p.id);
-    if (r.ok) ahspaiEnviarEstado(api, sala, r.eventos);
+    const usuario = sesiones.get(p.id);
+    const enCurso = pt.g.fase !== "terminada" && !pt.g.jugadores[asiento].eliminado;
+    if (enCurso && usuario) {
+      // Le guardamos el lugar un rato
+      pt.ausentes = pt.ausentes || new Map();
+      const timer = setTimeout(() => {
+        const a = pt.ausentes.get(usuario);
+        if (!a) return;
+        pt.ausentes.delete(usuario);
+        const r = motor.jugar(pt.g, a.asiento, { tipo: "rendirse" });
+        if (r.ok) ahspaiEnviarEstado(api, sala, r.eventos);
+        if (pt.asientos.size === 0 && pt.ausentes.size === 0) partidas.delete(sala);
+      }, ESPERA_VOLVER);
+      pt.ausentes.set(usuario, { asiento, timer, hasta: Date.now() + ESPERA_VOLVER });
+      avisarSala(api, pt, "ahspai_ausente", { asiento, segundos: Math.round(ESPERA_VOLVER / 1000) });
+      return;
+    }
+    if (enCurso) {
+      // Sin cuenta: salirse = rendirse
+      const r = motor.jugar(pt.g, asiento, { tipo: "rendirse" });
+      if (r.ok) ahspaiEnviarEstado(api, sala, r.eventos);
+    }
   }
-  if (pt.asientos.size === 0) partidas.delete(sala);
+  if (pt.asientos.size === 0 && !(pt.ausentes && pt.ausentes.size)) partidas.delete(sala);
+}
+
+// Al entrar con la cuenta: si tenía una partida esperándolo, lo devuelve a su lugar
+function ahspaiVolver(api, pid, usuario) {
+  for (const [sala, pt] of partidas) {
+    const a = pt.ausentes && pt.ausentes.get(usuario);
+    if (!a) continue;
+    clearTimeout(a.timer);
+    pt.ausentes.delete(usuario);
+    if (pt.g.fase === "terminada" || pt.g.jugadores[a.asiento].eliminado) return false;
+    pt.asientos.set(pid, a.asiento);
+    api.moveToRoom(pid, sala, TAM[pt.modo] || 0);
+    ahspaiEnviarInicio(api, pid, a.asiento, pt.modo);
+    api.sendTo(pid, "ahspai_estado", { vista: motor.vistaPara(pt.g, a.asiento), eventos: [] });
+    for (const otro of pt.asientos.keys()) if (otro !== pid) api.sendTo(otro, "ahspai_volvio", { asiento: a.asiento });
+    return true;
+  }
+  return false;
 }
 
 module.exports = {
@@ -217,6 +263,7 @@ module.exports = {
         sesiones.set(p.id, r.perfil.usuario);
         conMazo(p.id, r);
         ahspaiEnviarCatalogo(api, p.id);
+        r.volvio_a_partida = ahspaiVolver(api, p.id, r.perfil.usuario);
         return r;
       }
       if (name === "cuenta_token") {
@@ -225,6 +272,7 @@ module.exports = {
         sesiones.set(p.id, r.perfil.usuario);
         conMazo(p.id, r);
         ahspaiEnviarCatalogo(api, p.id);
+        r.volvio_a_partida = ahspaiVolver(api, p.id, r.perfil.usuario);
         return r;
       }
       const usuario = sesiones.get(p.id);

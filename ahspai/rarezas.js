@@ -1,6 +1,6 @@
 // Rareza de cada carta, sacada del color de la gema (esquina inferior izquierda).
 // comun = celeste, legendaria = amarilla, mitica = roja, divina = morada.
-// VP-10 Zorro Gris del Sur: su imagen no tiene gema, queda como comun hasta que Ryan diga.
+// VP-10 Zorro Gris del Sur: su imagen no tiene gema; Ryan confirmó que es común.
 module.exports = {
   "AHA-28": "legendaria",
   "AHA-25": "comun",
