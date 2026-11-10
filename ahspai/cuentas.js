@@ -17,8 +17,12 @@ const NEON = {
   database: "neondb",
 };
 
-// Copias iniciales según la rareza (mazos AHAHO y Encuentro)
+// Copias iniciales según la rareza.
+// Cuentas viejas: recibieron AHAHO + Encuentro con 3/2/1/1 (se quedan así).
+// Cuentas nuevas: eligen UN mazo (AHAHO o Encuentro) con 2/2/1/1, y se rellena con
+// comunes del otro mazo hasta que alcance para un mazo jugable.
 const COPIAS_INICIALES = { comun: 3, legendaria: 2, mitica: 1, divina: 1 };
+const COPIAS_REGALO = { comun: 2, legendaria: 2, mitica: 1, divina: 1 };
 const EXPANSIONES_INICIALES = ["AHAHO", "ENCUENTRO"];
 const PREMIO = { ganada: 50, empatada: 25, perdida: 10 };
 const SOBRE = { precio: 100, cartas: 5 };
@@ -164,14 +168,34 @@ function coleccionInicial() {
   }
   return col;
 }
+// Colección de regalo de una cuenta nueva: el mazo elegido (2/2/1/1) + comunes del otro
+// mazo, de a una copia, solo las que hagan falta para llegar al mínimo de un mazo jugable.
+function coleccionRegalo(exp) {
+  const col = {};
+  for (const [id, c] of Object.entries(CARTAS)) {
+    if (c.expansion === exp) col[id] = COPIAS_REGALO[RAREZAS[id] || "comun"] || 1;
+  }
+  const otras = Object.keys(CARTAS)
+    .filter((id) => EXPANSIONES_INICIALES.includes(CARTAS[id].expansion) && CARTAS[id].expansion !== exp && (RAREZAS[id] || "comun") === "comun")
+    .sort();
+  for (let ronda = 0; ronda < 2; ronda++) {
+    for (const id of otras) {
+      const falta = motor.validarMazo(mazoInicial(col), CARTAS) || "";
+      if (!falta) return col;
+      const m = falta.match(/^mazo_(principal|sobrenatural|recursos)_\d+_debe_ser/);
+      if (!m || categoria(id) !== m[1] || (col[id] || 0) > ronda) continue;
+      col[id] = (col[id] || 0) + 1;
+    }
+  }
+  return col;
+}
 function datosNuevos() {
-  const col = coleccionInicial();
-  const inicial = mazoInicial(col);
   return {
     creado: new Date().toISOString(),
-    coleccion: col,
-    mazos: [inicial, null, null, null, null], // 5 espacios para guardar mazos (el 1º viene armado)
-    activo: inicial ? 0 : -1,                 // qué mazo está activo
+    coleccion: {},
+    elegir_mazo: true,                        // al entrar elige AHAHO o ENCUENTRO
+    mazos: [null, null, null, null, null],    // 5 espacios para guardar mazos
+    activo: -1,                               // qué mazo está activo
     monedas: 0,
     stats: { ganadas: 0, perdidas: 0, empatadas: 0 },
     logros: [],
@@ -248,6 +272,7 @@ function perfil(f) {
     creado: d.creado || "",
     racha: d.racha || 0,
     sobres: d.sobres || 0,
+    elegir_mazo: !!d.elegir_mazo,
   };
 }
 
@@ -270,7 +295,7 @@ async function crear(usuario, clave) {
 function completar(f) {
   const d = f.datos;
   if (!Array.isArray(d.mazos)) d.mazos = [null, null, null, null, null];
-  if (!d.mazos.some(Boolean)) { d.mazos[0] = mazoInicial(d.coleccion); d.activo = d.mazos[0].listo ? 0 : -1; }
+  if (!d.elegir_mazo && !d.mazos.some(Boolean)) { d.mazos[0] = mazoInicial(d.coleccion); d.activo = d.mazos[0].listo ? 0 : -1; }
   if (!d.creado) d.creado = new Date().toISOString();
 }
 
@@ -293,6 +318,24 @@ async function _conToken(token) {
   completar(f);
   if (JSON.stringify(f.datos.mazos) !== antes) await actualizar(f);
   return { token, perfil: perfil(f), mazo: mazoParaJugar(f.datos) };
+}
+
+// Cuenta nueva: elige su mazo de regalo (una sola vez)
+async function _elegirMazo(usuario, exp) {
+  exp = String(exp || "").toUpperCase();
+  if (!EXPANSIONES_INICIALES.includes(exp)) throw new Error("mazo_no_existe");
+  const f = await leer(usuario);
+  if (!f) throw new Error("no_has_entrado");
+  const d = f.datos;
+  if (!d.elegir_mazo) throw new Error("ya_elegiste_mazo");
+  d.coleccion = coleccionRegalo(exp);
+  const m = mazoInicial(d.coleccion);
+  m.nombre = exp === "AHAHO" ? "Mazo AHAHO" : "Mazo Encuentro";
+  d.mazos[0] = m;
+  d.activo = m.listo ? 0 : -1;
+  delete d.elegir_mazo;
+  await actualizar(f);
+  return { perfil: perfil(f), mazo: mazoParaJugar(d) };
 }
 
 // Cerrar sesión en este aparato: su token deja de servir
@@ -483,6 +526,7 @@ async function sonAmigos(usuario, otro) {
 const entrar = (...a) => reintentar(() => _entrar(...a));
 const conToken = (...a) => reintentar(() => _conToken(...a));
 const salir = (...a) => reintentar(() => _salir(...a));
+const elegirMazo = (...a) => reintentar(() => _elegirMazo(...a));
 const premiar = (...a) => reintentar(() => _premiar(...a));
 const guardarMazo = (...a) => reintentar(() => _guardarMazo(...a));
 const borrarMazo = (...a) => reintentar(() => _borrarMazo(...a));
@@ -494,6 +538,6 @@ const responder = (...a) => reintentar(() => _responder(...a));
 const quitarAmigo = (...a) => reintentar(() => _quitarAmigo(...a));
 
 module.exports = {
-  verMazos, guardarMazo, borrarMazo, activarMazo, mazoInicial, revisarMazo,
+  verMazos, guardarMazo, borrarMazo, activarMazo, mazoInicial, revisarMazo, elegirMazo, coleccionRegalo,
   comprarSobre, cambiarFoto, perfilPublico,
   solicitar, responder, quitarAmigo, listaAmigos, sonAmigos, SOBRE, iniciar, crear, entrar, conToken, salir, verPerfil, verColeccion, premiar, coleccionInicial, PREMIO, _usarMemoria: () => { memoria = new Map(); listo = Promise.resolve(); } };

@@ -278,6 +278,7 @@ module.exports = {
       const usuario = sesiones.get(p.id);
       if (!usuario) throw new Error("no_has_entrado");
       if (name === "cuenta_perfil") return await CUENTAS.verPerfil(usuario);
+      if (name === "cuenta_elegir_mazo") return conMazo(p.id, await CUENTAS.elegirMazo(usuario, data?.mazo));
       if (name === "cuenta_coleccion") return await CUENTAS.verColeccion(usuario);
       // Mazos
       if (name === "cuenta_mazos") return await CUENTAS.verMazos(usuario);
