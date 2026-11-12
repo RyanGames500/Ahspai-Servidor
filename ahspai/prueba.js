@@ -441,11 +441,97 @@ prueba("500 partidas con jugadas al azar no se rompen", () => {
       // Nada se duplica ni se pierde: cada jugador sigue con todas sus cartas
       if (pasos % 50 === 0) for (const x of g.jugadores) {
         const total = x.principal.length + x.recursos.length + x.sobrenatural.length + x.mano.length + x.reserva.length + x.mausoleo.length + x.reciclaje.length
-          + x.batalla.filter(Boolean).length + x.defensa.filter(Boolean).length;
+          + x.batalla.filter(Boolean).length + x.defensa.filter(Boolean).length
+          + [...x.batalla, ...x.defensa].filter(Boolean).reduce((n, c) => n + (c.acuartelados || []).length, 0);
         if (total !== 44) throw new Error(`partida ${p}: el jugador ${x.asiento} tiene ${total} cartas en vez de 44`);
       }
     }
   }
+});
+
+console.log("\nEstructuras y acuartelar");
+function enNucleo(g) { ok(M.jugar(g, g.actual, { tipo: "robar", mazo: "principal" }), "robar"); }
+prueba("estructura se puede bajar en ATK o en DEF (siempre a la zona defensiva)", () => {
+  const g = nueva("1v1", 2); enNucleo(g);
+  const j = g.jugadores[0];
+  const e1 = { uid: g.sigUid++, carta: "E01", dueno: 0, origen: "recursos" }; j.mano.push(e1);
+  ok(M.jugar(g, 0, { tipo: "bajar", uid: e1.uid, zona: "batalla", casilla: 0, pos: "atk" }), "bajar en atk");
+  igual(j.defensa[0].pos, "atk", "posición");
+  igual(j.batalla[0], null, "no va a batalla");
+});
+prueba("acuartelar desde el campo y no la pueden atacar", () => {
+  const g = nueva("1v1", 2); enNucleo(g);
+  const est = poner(g, 0, "E05", "defensa", 1, "def");
+  const sol = poner(g, 0, "P01", "batalla", 2, "atk");
+  ok(M.jugar(g, 0, { tipo: "acuartelar", uid: sol.uid, estructura: est.uid }), "acuartelar");
+  igual(g.jugadores[0].batalla[2], null, "casilla vacía");
+  igual(est.acuartelados.length, 1, "adentro");
+  const v = M.vistaPara(g, 1);
+  igual(v.jugadores[0].defensa[1].cuartel.unidades[0].uid, sol.uid, "se ve en la vista");
+  igual(v.jugadores[0].defensa[1].cuartel.max, 2, "max");
+});
+prueba("acuartelar desde la mano cuenta como bajada y paga costo", () => {
+  const g = nueva("1v1", 2); enNucleo(g);
+  const est = poner(g, 0, "E06", "defensa", 0, "def");
+  const j = g.jugadores[0];
+  const h = { uid: g.sigUid++, carta: "P05", dueno: 0, origen: "principal" }; j.mano.push(h);
+  const antes = g.equipos[j.equipo].recursos.capital;
+  ok(M.jugar(g, 0, { tipo: "acuartelar", uid: h.uid, estructura: est.uid }), "acuartelar");
+  igual(g.equipos[j.equipo].recursos.capital, antes - 2, "pagó");
+  igual(g.cont.bajadas, 1, "cuenta como bajada");
+  igual(j.mano.some((c) => c.uid === h.uid), false, "salió de la mano");
+});
+prueba("respeta el tipo y el máximo del cuartel", () => {
+  const g = nueva("1v1", 2); enNucleo(g);
+  const est = poner(g, 0, "E05", "defensa", 1, "def"); // 2 humanas comunes
+  const lobo = poner(g, 0, "P02", "batalla", 0, "atk");
+  const r = M.jugar(g, 0, { tipo: "acuartelar", uid: lobo.uid, estructura: est.uid });
+  igual(r.error, "esa_unidad_no_cabe_aqui", "animal no");
+  const guerr = poner(g, 0, "P05", "batalla", 1, "atk");
+  igual(M.jugar(g, 0, { tipo: "acuartelar", uid: guerr.uid, estructura: est.uid }).error, "solo_unidades_comunes", "especial no");
+  const a = poner(g, 0, "P01", "batalla", 2, "atk"), b = poner(g, 0, "P09", "batalla", 3, "atk"), c = poner(g, 0, "P03", "batalla", 4, "atk");
+  ok(M.jugar(g, 0, { tipo: "acuartelar", uid: a.uid, estructura: est.uid }), "1");
+  ok(M.jugar(g, 0, { tipo: "acuartelar", uid: b.uid, estructura: est.uid }), "2");
+  igual(M.jugar(g, 0, { tipo: "acuartelar", uid: c.uid, estructura: est.uid }).error, "cuartel_lleno", "lleno");
+});
+prueba("desacuartelar a una casilla libre y atacar ese mismo turno", () => {
+  const g = nueva("1v1", 2); enNucleo(g);
+  const est = poner(g, 0, "E05", "defensa", 1, "def");
+  const sol = poner(g, 0, "P01", "batalla", 2, "atk");
+  ok(M.jugar(g, 0, { tipo: "acuartelar", uid: sol.uid, estructura: est.uid }), "acuartelar");
+  igual(M.jugar(g, 0, { tipo: "desacuartelar", uid: sol.uid, zona: "defensa", casilla: 1 }).error, "casilla_ocupada", "ocupada");
+  ok(M.jugar(g, 0, { tipo: "desacuartelar", uid: sol.uid, zona: "batalla", casilla: 0, pos: "atk" }), "sacar");
+  igual(g.jugadores[0].batalla[0].uid, sol.uid, "en batalla");
+  igual(est.acuartelados.length, 0, "cuartel vacío");
+  ok(M.jugar(g, 0, { tipo: "ir_batalla" }), "batalla");
+  ok(M.jugar(g, 0, { tipo: "atacar", uid: sol.uid, jugador: 1 }), "ataca directo");
+});
+prueba("si cae la estructura, las de adentro salen a la batalla (y las que no caben al mausoleo)", () => {
+  const g = nueva("1v1", 2); enNucleo(g);
+  const est = poner(g, 1, "E05", "defensa", 0, "atk"); // en ataque, defensa por ataque 0
+  for (let i = 0; i < 2; i++) est.acuartelados = [...(est.acuartelados || []), { uid: g.sigUid++, carta: "P01", dueno: 1, pos: "atk", herida: 0, contusion: 0 }];
+  // Rival con la batalla casi llena: solo 1 casilla libre
+  for (let i = 1; i < 5; i++) poner(g, 1, "P04", "batalla", i, "def");
+  g.jugadores[1].batalla = g.jugadores[1].batalla; // casilla 0 libre
+  const yo = poner(g, 0, "P05", "batalla", 0, "atk");
+  ok(M.jugar(g, 0, { tipo: "ir_batalla" }), "batalla");
+  // Las unidades en defensa del rival bloquean atacar estructuras: las sacamos de la batalla
+  for (let i = 1; i < 5; i++) { g.jugadores[1].mausoleo.push(g.jugadores[1].batalla[i]); g.jugadores[1].batalla[i] = { uid: g.sigUid++, carta: "E01", dueno: 1, pos: "def" }; }
+  const r = ok(M.jugar(g, 0, { tipo: "atacar", uid: yo.uid, objetivo: est.uid }), "atacar estructura");
+  const salen = r.eventos.filter((e) => e.tipo === "sale_del_cuartel");
+  igual(salen.length, 2, "salieron 2");
+  igual(salen[0].a, "batalla", "1ra a batalla");
+  igual(salen[1].a, "mausoleo", "2da no cabe");
+});
+prueba("Catedral: si cae, las acuarteladas van a la reserva", () => {
+  const g = nueva("1v1", 2); enNucleo(g);
+  const est = poner(g, 1, "E06", "defensa", 0, "atk");
+  est.acuartelados = [{ uid: g.sigUid++, carta: "P01", dueno: 1, pos: "atk", herida: 0, contusion: 0 }];
+  const yo = poner(g, 0, "P05", "batalla", 0, "atk");
+  ok(M.jugar(g, 0, { tipo: "ir_batalla" }), "batalla");
+  const r = ok(M.jugar(g, 0, { tipo: "atacar", uid: yo.uid, objetivo: est.uid }), "atacar");
+  igual(r.eventos.find((e) => e.tipo === "sale_del_cuartel").a, "reserva", "a la reserva");
+  igual(g.jugadores[1].reserva.length, 1, "reserva");
 });
 
 console.log(`\n${pasaron} pasaron, ${fallaron} fallaron\n`);

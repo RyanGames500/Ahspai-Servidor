@@ -41,10 +41,12 @@ const LOGROS = [
   { id: "abre_sobres", t: "Abre-sobres", d: "Abre 10 sobres", ok: (d) => (d.sobres || 0) >= 10 },
   { id: "divino", t: "Divino", d: "Consigue una carta divina", ok: (d) => Object.keys(d.coleccion).some((k) => d.coleccion[k] > 0 && RAREZAS[k] === "divina") },
   { id: "rico", t: "Bolsillo lleno", d: "Junta 1000 monedas", ok: (d) => d.monedas >= 1000 },
+  { id: "campeon_torneo", t: "Campeon de torneo", d: "Gana un torneo del Contador Ashpai", ok: (d) => (d.torneos_ganados || 0) >= 1 },
 ];
 
 let pool = null;      // conexión a Neon
 let memoria = null;   // si no hay base de datos: Map usuario -> fila
+let memCodigos = null; // si no hay base de datos: Map codigo -> fila
 let listo = null;     // promesa de inicio
 
 function configPg() {
@@ -73,6 +75,7 @@ function iniciar() {
     if (!cfg) {
       console.log("[Ahspai] Sin base de datos (DATABASE_URL vacía): las cuentas se guardan solo en memoria.");
       memoria = new Map();
+      memCodigos = new Map();
       return;
     }
     const { Pool } = require("pg");
@@ -89,6 +92,17 @@ function iniciar() {
     )`);
     // Versión de cada cuenta: si dos aparatos guardan a la vez, el segundo se reintenta en vez de pisar al primero
     await pool.query("ALTER TABLE ahspai_cuentas ADD COLUMN IF NOT EXISTS ver INTEGER NOT NULL DEFAULT 0");
+    // Códigos de regalo (los crea el admin desde el Contador Ashpai)
+    await pool.query(`CREATE TABLE IF NOT EXISTS ahspai_codigos (
+      codigo TEXT PRIMARY KEY,
+      premio JSONB NOT NULL,
+      usos_max INTEGER NOT NULL DEFAULT 1,
+      usos INTEGER NOT NULL DEFAULT 0,
+      canjes JSONB NOT NULL DEFAULT '[]',
+      nota TEXT NOT NULL DEFAULT '',
+      por TEXT NOT NULL,
+      creado TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`);
     console.log("[Ahspai] Base de datos Neon lista.");
   })().catch((e) => {
     console.log("[Ahspai] No se pudo conectar a la base de datos:", e.message);
@@ -273,6 +287,8 @@ function perfil(f) {
     racha: d.racha || 0,
     sobres: d.sobres || 0,
     elegir_mazo: !!d.elegir_mazo,
+    torneos_ganados: d.torneos_ganados || 0,
+    es_admin: esAdmin(f.usuario),
   };
 }
 
@@ -521,6 +537,151 @@ async function sonAmigos(usuario, otro) {
   return (yo.datos.amigos || []).includes(String(otro || "").toLowerCase());
 }
 
+// =====================================================================
+// CÓDIGOS DE REGALO (Contador Ashpai)
+// Solo el admin (AHSPAI_ADMIN, por defecto "ryangames") los crea.
+// Premio: { monedas, sobre: "todas"|"AHAHO"|"ENCUENTRO", sobres: n, carta: id, copias: n }
+// usos_max: 1 = lo canjea una sola cuenta; más = lo pueden canjear varias (cada cuenta una vez)
+// =====================================================================
+const ADMIN = () => String(process.env.AHSPAI_ADMIN || "ryangames").toLowerCase();
+const esAdmin = (usuario) => String(usuario || "").toLowerCase() === ADMIN();
+const LETRAS_CODIGO = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // sin 0/O ni 1/I para que no se confundan
+const limpiarCodigo = (c) => String(c || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+function nuevoCodigo() {
+  let c = "";
+  const b = crypto.randomBytes(8);
+  for (let i = 0; i < 8; i++) c += LETRAS_CODIGO[b[i] % LETRAS_CODIGO.length];
+  return c;
+}
+function revisarPremio(p) {
+  p = p || {};
+  const out = {};
+  const monedas = Math.floor(Number(p.monedas) || 0);
+  if (monedas > 0) out.monedas = Math.min(monedas, 100000);
+  if (p.sobre !== undefined && p.sobre !== "") {
+    if (!(p.sobre in SOBRES)) throw new Error("sobre_invalido");
+    out.sobre = p.sobre;
+    out.sobres = Math.min(Math.max(1, Math.floor(Number(p.sobres) || 1)), 20);
+  }
+  if (p.carta) {
+    if (!CARTAS[p.carta]) throw new Error("carta_no_existe");
+    out.carta = p.carta;
+    out.copias = Math.min(Math.max(1, Math.floor(Number(p.copias) || 1)), 10);
+  }
+  if (!Object.keys(out).length) throw new Error("elige_un_premio");
+  return out;
+}
+async function crearCodigos(usuario, premio, cantidad, usosMax, nota) {
+  if (!esAdmin(usuario)) throw new Error("solo_el_admin");
+  await iniciar();
+  const pr = revisarPremio(premio);
+  cantidad = Math.min(Math.max(1, Math.floor(Number(cantidad) || 1)), 200);
+  usosMax = Math.min(Math.max(1, Math.floor(Number(usosMax) || 1)), 10000);
+  nota = String(nota || "").slice(0, 60);
+  const codigos = [];
+  while (codigos.length < cantidad) {
+    const c = nuevoCodigo();
+    const fila = { codigo: c, premio: pr, usos_max: usosMax, usos: 0, canjes: [], nota, por: ADMIN(), creado: new Date().toISOString() };
+    if (memCodigos) { if (memCodigos.has(c)) continue; memCodigos.set(c, fila); codigos.push(c); continue; }
+    const r = await pool.query("INSERT INTO ahspai_codigos (codigo, premio, usos_max, nota, por) VALUES ($1,$2,$3,$4,$5) ON CONFLICT (codigo) DO NOTHING",
+      [c, JSON.stringify(pr), usosMax, nota, fila.por]);
+    if (r.rowCount === 1) codigos.push(c);
+  }
+  return { codigos, premio: pr, usos_max: usosMax, nota };
+}
+async function verCodigos(usuario) {
+  if (!esAdmin(usuario)) throw new Error("solo_el_admin");
+  await iniciar();
+  if (memCodigos) return { codigos: [...memCodigos.values()].slice(-50).reverse().map(({ canjes, ...r }) => r) };
+  const r = await pool.query("SELECT codigo, premio, usos_max, usos, nota, creado FROM ahspai_codigos ORDER BY creado DESC LIMIT 50");
+  return { codigos: r.rows };
+}
+// Reserva un uso del código para esta cuenta (de una sola vez, sin que dos lo gasten a la vez)
+async function tomarCodigo(codigo, usuario) {
+  if (memCodigos) {
+    const f = memCodigos.get(codigo);
+    if (!f) throw new Error("codigo_no_existe");
+    if (f.canjes.includes(usuario)) throw new Error("ya_canjeaste_este_codigo");
+    if (f.usos >= f.usos_max) throw new Error("codigo_ya_usado");
+    f.usos++; f.canjes.push(usuario);
+    return copia(f.premio);
+  }
+  const r = await pool.query(
+    `UPDATE ahspai_codigos SET usos = usos + 1, canjes = canjes || to_jsonb($2::text)
+     WHERE codigo = $1 AND usos < usos_max AND NOT (canjes ? $2) RETURNING premio`, [codigo, usuario]);
+  if (r.rowCount === 1) return r.rows[0].premio;
+  const e = await pool.query("SELECT usos, usos_max, canjes FROM ahspai_codigos WHERE codigo = $1", [codigo]);
+  if (!e.rows[0]) throw new Error("codigo_no_existe");
+  if ((e.rows[0].canjes || []).includes(usuario)) throw new Error("ya_canjeaste_este_codigo");
+  throw new Error("codigo_ya_usado");
+}
+async function devolverCodigo(codigo, usuario) {
+  try {
+    if (memCodigos) { const f = memCodigos.get(codigo); if (f) { f.usos--; f.canjes = f.canjes.filter((u) => u !== usuario); } return; }
+    await pool.query("UPDATE ahspai_codigos SET usos = usos - 1, canjes = canjes - $2 WHERE codigo = $1", [codigo, usuario]);
+  } catch (e) { console.log("[Ahspai] No se pudo devolver el código", codigo, e.message); }
+}
+// Abre sobres o da cartas/monedas a una cuenta (se usa en canjes y premios)
+function darPremio(d, pr) {
+  const res = { monedas: 0, cartas: [], nuevas: [] };
+  if (pr.monedas) { d.monedas += pr.monedas; res.monedas = pr.monedas; }
+  const sumar = (id) => {
+    if (!(d.coleccion[id] > 0) && !res.nuevas.includes(id)) res.nuevas.push(id);
+    d.coleccion[id] = (d.coleccion[id] || 0) + 1;
+    res.cartas.push(id);
+  };
+  if (pr.sobre !== undefined) {
+    const pool = Object.keys(CARTAS).filter((id) => !SOBRES[pr.sobre] || CARTAS[id].expansion === SOBRES[pr.sobre]);
+    for (let s = 0; s < (pr.sobres || 1); s++) for (let i = 0; i < SOBRE.cartas; i++) sumar(sacarCarta(pool));
+    d.sobres = (d.sobres || 0) + (pr.sobres || 1);
+  }
+  if (pr.carta) for (let i = 0; i < (pr.copias || 1); i++) sumar(pr.carta);
+  return res;
+}
+async function canjearCodigo(usuario, codigo) {
+  await iniciar();
+  codigo = limpiarCodigo(codigo);
+  if (codigo.length !== 8) throw new Error("codigo_invalido");
+  await cargar(usuario); // que la cuenta exista
+  const pr = await tomarCodigo(codigo, usuario);
+  try {
+    return await reintentar(async () => {
+      const f = await cargar(usuario);
+      const res = darPremio(f.datos, pr);
+      await actualizar(f);
+      const nombres = res.cartas.map((id) => ({ id, nombre: CARTAS[id].nombre, rareza: RAREZAS[id] || "comun" }));
+      return { premio: pr, ...res, nombres, perfil: perfil(f) };
+    });
+  } catch (e) {
+    await devolverCodigo(codigo, usuario); // si no se pudo dar el premio, el código sigue sirviendo
+    throw e;
+  }
+}
+
+// =====================================================================
+// TORNEOS (Contador Ashpai): premio al campeón
+// Para que no se abuse: mínimo 4 jugadores, 2 con cuenta, y cada cuenta gana premio 1 vez por día.
+// =====================================================================
+const PREMIO_TORNEO = 100;
+async function _torneoCampeon(organizador, campeon, jugadores, nombre) {
+  campeon = String(campeon || "").toLowerCase();
+  const lista = Array.isArray(jugadores) ? jugadores.map((j) => String(j || "")).slice(0, 64) : [];
+  if (lista.length < 4) throw new Error("torneo_muy_chico");
+  const conCuenta = [];
+  for (const u of new Set(lista.map((x) => x.toLowerCase()))) if (await leer(u)) conCuenta.push(u);
+  if (conCuenta.length < 2) throw new Error("faltan_jugadores_con_cuenta");
+  if (!conCuenta.includes(campeon)) throw new Error("el_campeon_no_tiene_cuenta");
+  const f = await cargar(campeon);
+  const hoy = new Date().toISOString().slice(0, 10);
+  const d = f.datos;
+  d.torneos_ganados = (d.torneos_ganados || 0) + 1;
+  let monedas = 0;
+  if (d.ultimo_premio_torneo !== hoy) { d.monedas += PREMIO_TORNEO; monedas = PREMIO_TORNEO; d.ultimo_premio_torneo = hoy; }
+  d.historial_torneos = [...(d.historial_torneos || []), { nombre: String(nombre || "Torneo").slice(0, 40), fecha: hoy, por: organizador, jugadores: lista.length }].slice(-20);
+  await actualizar(f);
+  return { campeon, monedas, torneos_ganados: d.torneos_ganados };
+}
+const torneoCampeon = (...a) => reintentar(() => _torneoCampeon(...a));
 
 
 const entrar = (...a) => reintentar(() => _entrar(...a));
@@ -538,6 +699,7 @@ const responder = (...a) => reintentar(() => _responder(...a));
 const quitarAmigo = (...a) => reintentar(() => _quitarAmigo(...a));
 
 module.exports = {
+  crearCodigos, verCodigos, canjearCodigo, torneoCampeon, esAdmin,
   verMazos, guardarMazo, borrarMazo, activarMazo, mazoInicial, revisarMazo, elegirMazo, coleccionRegalo,
   comprarSobre, cambiarFoto, perfilPublico,
-  solicitar, responder, quitarAmigo, listaAmigos, sonAmigos, SOBRE, iniciar, crear, entrar, conToken, salir, verPerfil, verColeccion, premiar, coleccionInicial, PREMIO, _usarMemoria: () => { memoria = new Map(); listo = Promise.resolve(); } };
+  solicitar, responder, quitarAmigo, listaAmigos, sonAmigos, SOBRE, iniciar, crear, entrar, conToken, salir, verPerfil, verColeccion, premiar, coleccionInicial, PREMIO, _usarMemoria: () => { memoria = new Map(); memCodigos = new Map(); listo = Promise.resolve(); } };

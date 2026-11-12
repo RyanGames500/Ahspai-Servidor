@@ -15,5 +15,7 @@ module.exports = {
   E01: { nombre: "Muralla de prueba", tipo: "estructura", movil: false, ataque: 0, defensa: 5, pv: 2, genera: { capital: 2 } },
   E02: { nombre: "Templo de prueba", tipo: "estructura", movil: false, ataque: 0, defensa: 3, pv: 2, genera: { creencia: 2 } },
   E03: { nombre: "Granero de prueba", tipo: "estructura", movil: false, ataque: 0, defensa: 3, pv: 2, genera: { alimento: 2 } },
+  E05: { nombre: "Cuartel de prueba", tipo: "estructura", movil: false, ataque: 0, defensa: 4, pv: 2, acuartelar: "2 Unid. humana común", genera: { capital: 1 } },
+  E06: { nombre: "Catedral de prueba", tipo: "estructura", movil: false, ataque: 0, defensa: 4, pv: 2, acuartelar: "3 Unid. Humana", efecto: "(En tablero): Cuando esta carta es destruida las cartas acuarteladas se envían al mazo de reserva.", genera: { creencia: 1 } },
   E04: { nombre: "Mercado de prueba", tipo: "estructura", movil: false, ataque: 0, defensa: 2, pv: 1, genera: { capital: 1, alimento: 1 } },
 };

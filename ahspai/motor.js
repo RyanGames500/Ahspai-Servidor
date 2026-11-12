@@ -152,6 +152,40 @@ function buscarEnCampo(g, uid) {
   }
   return null;
 }
+// ------------------------------------------------------------------
+// Acuartelar: unidades guardadas dentro de una estructura
+// "2 Unid. humana común" → hasta 2, humanas, clase común. También: animales, sobrenaturales, espiritista.
+// Adentro no atacan ni las pueden atacar; al salir pueden atacar ese mismo turno.
+// ------------------------------------------------------------------
+function reglaCuartel(c) {
+  const t = String((c && c.acuartelar) || "").toLowerCase();
+  if (!t) return null;
+  const max = parseInt(t, 10) || 0;
+  if (max <= 0) return null;
+  const especies = [];
+  if (/human/.test(t)) especies.push("humano");
+  if (/animal/.test(t)) especies.push("animal");
+  if (/sobrenatural/.test(t)) especies.push("sobrenatural");
+  return { max, especies, comun: /com[uú]n/.test(t), espiritista: /espiritista/.test(t) };
+}
+// null si la unidad cabe en ese cuartel; si no, el motivo
+function motivoNoCabe(regla, c) {
+  if (c.tipo !== "unidad") return "solo_unidades_se_acuartelan";
+  const especie = c.sobrenatural ? "sobrenatural" : c.especie;
+  if (regla.especies.length && !regla.especies.includes(especie)) return "esa_unidad_no_cabe_aqui";
+  if (regla.comun && c.clase !== "comun") return "solo_unidades_comunes";
+  if (regla.espiritista && c.alineamiento !== "espiritista") return "solo_unidades_espiritistas";
+  return null;
+}
+// Busca una unidad acuartelada de un jugador
+function buscarEnCuartel(j, uid) {
+  for (const zona of ["batalla", "defensa"]) for (const est of j[zona]) {
+    if (!est || !Array.isArray(est.acuartelados)) continue;
+    const i = est.acuartelados.findIndex((c) => c.uid === uid);
+    if (i >= 0) return { est, i, inst: est.acuartelados[i] };
+  }
+  return null;
+}
 function campoVacio(j) {
   return j.batalla.every((c) => !c) && j.defensa.every((c) => !c);
 }
@@ -213,6 +247,27 @@ function derrotar(g, inst, ev, equipoQueGana) {
   limpiarInst(inst);
   lugar.jug.mausoleo.push(inst);
   ev.push({ tipo: "derrotada", uid: inst.uid, carta: inst.carta, jugador: lugar.jug.asiento });
+  // Si era una estructura con unidades adentro: salen a casillas libres de batalla (las que no caben, al mausoleo).
+  // Cartas que dicen que las acuarteladas se van a la reserva (Santa Catedral) las mandan a la reserva.
+  const dentro = Array.isArray(inst.acuartelados) ? inst.acuartelados : [];
+  inst.acuartelados = [];
+  const aReserva = /acuarteladas se env[ií]an al mazo de reserva/i.test(carta(g, inst).efecto || "");
+  for (const u of dentro) {
+    const j = lugar.jug;
+    if (aReserva) {
+      limpiarInst(u); u.entroReserva = g.turno; j.reserva.push(u);
+      ev.push({ tipo: "sale_del_cuartel", jugador: j.asiento, uid: u.uid, carta: u.carta, a: "reserva" });
+      continue;
+    }
+    const libre = j.batalla.findIndex((c) => !c);
+    if (libre >= 0) {
+      j.batalla[libre] = u;
+      ev.push({ tipo: "sale_del_cuartel", jugador: j.asiento, uid: u.uid, carta: u.carta, a: "batalla", casilla: libre, pos: u.pos });
+    } else {
+      limpiarInst(u); j.mausoleo.push(u);
+      ev.push({ tipo: "sale_del_cuartel", jugador: j.asiento, uid: u.uid, carta: u.carta, a: "mausoleo" });
+    }
+  }
   if (equipoQueGana !== undefined) darPuntos(g, equipoQueGana, carta(g, inst).pv || 0, ev, "derrota_en_combate");
 }
 
@@ -228,7 +283,10 @@ function empezarTurno(g, ev) {
   g.etapa = "robo";
   g.ataque = null;
   g.cont = { bajadas: 0, mulligans: 0, retiradas: 0, desdeReserva: 0 };
-  for (const z of ["batalla", "defensa"]) for (const c of j[z]) if (c) { c.ataco = false; c.salioDeReserva = false; c.cambioPos = false; }
+  for (const z of ["batalla", "defensa"]) for (const c of j[z]) if (c) {
+    c.ataco = false; c.salioDeReserva = false; c.cambioPos = false;
+    for (const u of c.acuartelados || []) { u.ataco = false; u.salioDeReserva = false; u.cambioPos = false; }
+  }
   ev.push({ tipo: "turno", jugador: j.asiento, turno: g.turno });
 
   // Sin cartas en mano, mazo principal ni reserva: queda fuera
@@ -396,6 +454,71 @@ function jugar(g, asiento, accion) {
         for (const r of RECURSOS) rec[r] += c.genera[r] || 0;
         ev.push({ tipo: "genera", equipo: j.equipo, recursos: c.genera });
       }
+      return { ok: true, eventos: ev };
+    }
+
+    // ---------- Acuartelar (desde el campo o desde la mano/sobrenatural) ----------
+    case "acuartelar": {
+      if (!enNucleo) return mal("solo_en_nucleo");
+      const lugarE = buscarEnCampo(g, accion.estructura);
+      if (!lugarE || lugarE.jug !== j) return mal("estructura_no_esta");
+      const est = lugarE.inst;
+      const regla = reglaCuartel(carta(g, est));
+      if (!regla) return mal("esa_estructura_no_acuartela");
+      if (!Array.isArray(est.acuartelados)) est.acuartelados = [];
+      if (est.acuartelados.length >= regla.max) return mal("cuartel_lleno");
+      const lugarU = buscarEnCampo(g, accion.uid);
+      let inst, desde;
+      if (lugarU) {
+        if (lugarU.jug !== j) return mal("carta_no_esta");
+        inst = lugarU.inst; desde = "campo";
+      } else {
+        desde = accion.desde === "sobrenatural" ? "sobrenatural" : "mano";
+        inst = j[desde].find((c) => c.uid === accion.uid);
+      }
+      if (!inst) return mal("carta_no_esta");
+      const c = carta(g, inst);
+      const motivo = motivoNoCabe(regla, c);
+      if (motivo) return mal(motivo);
+      const rec = g.equipos[j.equipo].recursos;
+      if (desde === "campo") {
+        if (c.movil === false) return mal("carta_inmovil");
+        if (inst.ataco) return mal("ya_ataco_este_turno");
+        j[lugarU.zona][lugarU.casilla] = null;
+      } else {
+        // Desde la mano es como bajarla: cuenta como bajada y se paga su costo
+        if (g.cont.bajadas >= REGLAS.bajadasPorTurno) return mal("limite_de_bajadas");
+        if (c.costoExtra) return mal("costo_especial_todavia_no_disponible");
+        const costo = c.costo || {};
+        for (const r of RECURSOS) if ((rec[r] || 0) < (costo[r] || 0)) return mal(`falta_${r}`);
+        for (const r of RECURSOS) rec[r] -= costo[r] || 0;
+        sacarDe(j[desde], inst.uid);
+        inst.pos = accion.pos === "def" ? "def" : "atk";
+        g.cont.bajadas++;
+      }
+      est.acuartelados.push(inst);
+      ev.push({ tipo: "acuartelada", jugador: j.asiento, uid: inst.uid, carta: inst.carta, estructura: est.uid, desde });
+      if (desde !== "campo" && c.genera) {
+        for (const r of RECURSOS) rec[r] += c.genera[r] || 0;
+        ev.push({ tipo: "genera", equipo: j.equipo, recursos: c.genera });
+      }
+      return { ok: true, eventos: ev };
+    }
+
+    // ---------- Sacar del cuartel (puede atacar ese mismo turno) ----------
+    case "desacuartelar": {
+      if (!enNucleo) return mal("solo_en_nucleo");
+      const lugar = buscarEnCuartel(j, accion.uid);
+      if (!lugar) return mal("carta_no_esta");
+      const zona = accion.zona === "defensa" ? "defensa" : "batalla";
+      const casilla = Math.floor(Number(accion.casilla));
+      if (!(casilla >= 0 && casilla < j[zona].length)) return mal("casilla_invalida");
+      if (j[zona][casilla]) return mal("casilla_ocupada");
+      const inst = lugar.inst;
+      lugar.est.acuartelados.splice(lugar.i, 1);
+      if (accion.pos === "atk" || accion.pos === "def") inst.pos = accion.pos;
+      j[zona][casilla] = inst;
+      ev.push({ tipo: "desacuartelada", jugador: j.asiento, uid: inst.uid, carta: inst.carta, estructura: lugar.est.uid, zona, casilla, pos: inst.pos });
       return { ok: true, eventos: ev };
     }
 
@@ -588,7 +711,10 @@ function jugar(g, asiento, accion) {
 // ------------------------------------------------------------------
 function vistaCarta(g, inst) {
   if (!inst) return null;
+  const regla = reglaCuartel(carta(g, inst));
+  const cuartel = regla ? { max: regla.max, unidades: (inst.acuartelados || []).map((u) => ({ uid: u.uid, carta: u.carta, pos: u.pos })) } : undefined;
   return {
+    cuartel,
     uid: inst.uid, carta: inst.carta, pos: inst.pos,
     ataque: ataqueDe(g, inst), defensa: defensaDe(g, inst),
     herida: inst.herida, contusion: inst.contusion, ataco: inst.ataco,

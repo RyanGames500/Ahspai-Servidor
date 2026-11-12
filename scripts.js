@@ -263,7 +263,8 @@ module.exports = {
         sesiones.set(p.id, r.perfil.usuario);
         conMazo(p.id, r);
         ahspaiEnviarCatalogo(api, p.id);
-        r.volvio_a_partida = ahspaiVolver(api, p.id, r.perfil.usuario);
+        // El Contador Ashpai no se mete a partidas: solo usa la cuenta
+        r.volvio_a_partida = data?.app === "contador" ? false : ahspaiVolver(api, p.id, r.perfil.usuario);
         return r;
       }
       if (name === "cuenta_token") {
@@ -272,12 +273,21 @@ module.exports = {
         sesiones.set(p.id, r.perfil.usuario);
         conMazo(p.id, r);
         ahspaiEnviarCatalogo(api, p.id);
-        r.volvio_a_partida = ahspaiVolver(api, p.id, r.perfil.usuario);
+        // El Contador Ashpai no se mete a partidas: solo usa la cuenta
+        r.volvio_a_partida = data?.app === "contador" ? false : ahspaiVolver(api, p.id, r.perfil.usuario);
         return r;
       }
       const usuario = sesiones.get(p.id);
       if (!usuario) throw new Error("no_has_entrado");
       if (name === "cuenta_perfil") return await CUENTAS.verPerfil(usuario);
+      // Contador Ashpai: códigos de regalo y torneos
+      if (name === "cuenta_canjear") {
+        if (demasiadosIntentos(p.id)) throw new Error("espera_un_minuto");
+        return await CUENTAS.canjearCodigo(usuario, data?.codigo);
+      }
+      if (name === "cuenta_crear_codigos") return await CUENTAS.crearCodigos(usuario, data?.premio, data?.cantidad, data?.usos, data?.nota);
+      if (name === "cuenta_ver_codigos") return await CUENTAS.verCodigos(usuario);
+      if (name === "cuenta_torneo_campeon") return await CUENTAS.torneoCampeon(usuario, data?.campeon, data?.jugadores, data?.nombre);
       if (name === "cuenta_elegir_mazo") return conMazo(p.id, await CUENTAS.elegirMazo(usuario, data?.mazo));
       if (name === "cuenta_coleccion") return await CUENTAS.verColeccion(usuario);
       // Mazos
