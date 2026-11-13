@@ -29,7 +29,8 @@ const ALIASES = {
   "convertir al catolisismo": "convertir al catolicismo",
   "exorsismo diivno": "exorcismo divino",
   "hoy te convertis en heroe": "hoy te conviertes en heroe",
-  "pero del conquistador": "perro del conquistador",
+  "francisco pizarro": "francisco pizzarro",
+  "pero del conquistador": "peto del conquistador",
 };
 
 // Cartas que debe darte el mazo AHAHO al elegirlo al abrir cuenta
@@ -251,7 +252,7 @@ function instalar() {
       const CARTAS = require("./cartas.js");
       const original = cuentas.elegirMazo;
       cuentas.elegirMazo = async function (usuario, exp) {
-        const r = await original(usuario, exp); // flujo normal (chequea cuenta, guarda, responde)
+        const r = await original(usuario, exp); // flujo normal (chequeos, guarda, responde)
         const e = String(exp || "").toUpperCase();
         const u = String(usuario || "");
         try { await corregir(u, e, cuentas, CARTAS); }
