@@ -1018,12 +1018,17 @@ function jugarInterno(g, asiento, accion) {
       if (c.tipo !== "objeto") return mal("solo_objetos_se_desequipan");
       if (l.inst.desequipoTurno === g.turno) return mal("ya_se_desequipo_este_turno");
       const def = EF.cartas[l.inst.carta] || {};
-      if (accion.objetivo === undefined) { l.quitar(); limpiarInst(l.inst); j.mausoleo.push(l.inst); ev.push({ tipo: "movida", uid: l.inst.uid, carta: l.inst.carta, de: "equipo", a: "mausoleo", jugador: j.asiento }); return { ok: true, eventos: ev }; }
+      // Lo que el objeto le daba al portador (Guallcanga: solo defensa, Báculo: inbloqueable) se recalcula al quitarlo
+      const recalcular = (u) => { if (!u) return; const eq = u.equipos || []; u.soloDefensa = eq.some((x) => x.carta === "AHA-22"); u.inbloqueable = eq.some((x) => x.carta === "GL-10"); };
+      if (accion.objetivo === undefined) { l.quitar(); recalcular(l.portador); limpiarInst(l.inst); j.mausoleo.push(l.inst); ev.push({ tipo: "movida", uid: l.inst.uid, carta: l.inst.carta, de: "equipo", a: "mausoleo", jugador: j.asiento }); return { ok: true, eventos: ev }; }
       const lo = buscarEnCampo(g, Number(accion.objetivo));
       if (!lo || lo.jug !== j || lo.inst === l.portador) return mal("objetivo_invalido");
       if (def.equipa && !filtro(def.equipa.objetivo)(g, lo.inst)) return mal("no_se_puede_equipar_ahi");
       const obj = l.inst;
+      const antes = l.portador;
       equiparA(g, obj, lo.inst, ev, def.equipa ? def.equipa.mods : []);
+      recalcular(antes); recalcular(lo.inst);
+      if (lo.inst.soloDefensa) lo.inst.pos = "def";
       obj.desequipoTurno = g.turno;
       return { ok: true, eventos: ev };
     }

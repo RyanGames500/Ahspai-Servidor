@@ -733,5 +733,18 @@ prueba("Imparable: los sucesos no la pueden elegir", () => {
   const cs = M._candidatos ? M._candidatos(g, ctx, [{ j: "rival", zona: "campo" }], null) : null;
   if (cs) { igual(cs.some((x) => x.inst === n), false, "Nuño no aparece"); igual(cs.some((x) => x.inst === otro), true, "la otra sí"); }
 });
+prueba("mover un objeto equipado a otra carta (Guallcanga)", () => {
+  const g = real(); ricos(g);
+  const a = poner(g, 0, "AHA-28", "batalla", 0, "atk"), b = poner(g, 0, "AHA-28", "batalla", 1, "atk");
+  const gu = darMano(g, 0, "AHA-22");
+  ok(M.jugar(g, 0, { tipo: "activar", uid: gu.uid }), "activar");
+  ok(M.jugar(g, 0, { tipo: "elegir", uids: [a.uid] }), "a la primera");
+  igual(a.soloDefensa, true, "solo defiende");
+  const d0 = H.defensaDe(g, b);
+  ok(M.jugar(g, 0, { tipo: "desequipar", uid: gu.uid, objetivo: b.uid }), "mover");
+  igual(a.soloDefensa, false, "la primera ya puede atacar"); igual(b.soloDefensa, true, "la segunda solo defiende");
+  igual(H.defensaDe(g, b), d0 + 5, "+5 DEF pasa a la segunda"); igual(b.pos, "def", "queda en defensa");
+  igual(M.jugar(g, 0, { tipo: "desequipar", uid: gu.uid }).error, "ya_se_desequipo_este_turno", "1 vez por turno");
+});
 console.log(`\n${pasaron} pasaron, ${fallaron} fallaron\n`);
 process.exit(fallaron ? 1 : 0);
