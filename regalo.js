@@ -29,7 +29,8 @@ const ALIASES = {
   "convertir al catolisismo": "convertir al catolicismo",
   "exorsismo diivno": "exorcismo divino",
   "hoy te convertis en heroe": "hoy te conviertes en heroe",
-  "pero del conquistador": "perro del conquistador",
+  "francisco pizarro": "francisco pizzarro",
+  "pero del conquistador": "peto del conquistador",
 };
 
 // Cartas que debe darte el mazo AHAHO al elegirlo al abrir cuenta
