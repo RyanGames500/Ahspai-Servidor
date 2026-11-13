@@ -1,5 +1,8 @@
 // Simulación rápida con un mazo hecho de cartas reales:  node sim_reales.js
 const M = require("./motor.js"), C = require("./cartas.js");
+// Si una carta pregunta algo, se contesta lo mínimo (para que la simulación no se trabe)
+const J0 = M.jugar;
+M.jugar = (g, s, a) => { const r = J0(g, s, a); let k = 0; while (g.pendiente && k++ < 50) { const p = g.pendiente; J0(g, p.jugador, p.tipo === "opcion" ? { tipo: "elegir", opcion: 0 } : { tipo: "elegir", uids: p.opciones.slice(0, p.min).map((o) => o.uid) }); } return r; };
 const ids = Object.keys(C);
 const lim = (c) => c.sobrenatural ? 2 : c.tipo === "estructura" ? 3 : ({ peon: 4, belico: 3, heroe: 3, lider: 1 })[c.alineamiento] ?? 3;
 const pick = (f, n) => { const out = []; for (const id of ids) { const c = C[id]; if (!f(c)) continue; for (let k = 0; k < lim(c) && out.length < n; k++) out.push(id); } return out; };
