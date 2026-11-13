@@ -65,3 +65,9 @@ module.exports = {
   "VP-14": "mitica",
   "VP-10": "comun"
 };
+
+// Arreglo de los mazos de regalo (13-nov-2026): cuentas.js es muy grande para editarlo entero,
+// así que el parche se activa desde aquí (cuentas.js siempre carga este archivo).
+// Envuelve cuentas.elegirMazo para que la colección quede con la lista EXACTA de regalo.js
+// (antes regalaba por rareza y rellenaba con comunes del otro mazo).
+require("./regalo.js").instalar();
