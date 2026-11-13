@@ -48,11 +48,64 @@ const mal = (error) => ({ ok: false, error, eventos: [] });
 function carta(g, inst) {
   return g.cartas[inst.carta];
 }
+// ------------------------------------------------------------------
+// Valores de ataque y defensa (reglamento: "Puntos de aplicación")
+//   Herida: -1 ATK permanente y acumulable.  Contusión: -1 DEF permanente y acumulable.
+//   Daño / potenciar / disminuir: modificadores en inst.mods
+//     { ataque, defensa, dura: "turno" | "siempre" | "hasta_atacar", texto, desde }
+//     "turno" = se borra al terminar el turno (el Daño del reglamento)
+//   Honor (Nombre) +N: todas TUS cartas en tablero con ese nombre ganan +N de ATK y DEF.
+//   Acuartelar: la estructura gana +1 ATK o +1 DEF por cada unidad adentro (lo elige el dueño).
+//   Nunca baja de 0 (las cartas no mueren por herida o contusión).
+// ------------------------------------------------------------------
+function bonos(g, inst) {
+  const lista = [];
+  for (const m of inst.mods || []) lista.push({ ataque: m.ataque || 0, defensa: m.defensa || 0, texto: m.texto || "", dura: m.dura || "siempre" });
+  // Honor de las cartas del mismo tablero
+  const j = duenoEnTablero(g, inst);
+  if (j) {
+    const nombre = String(carta(g, inst).nombre || "").toLowerCase();
+    for (const h of cartasEnTablero(j)) {
+      const ch = carta(g, h);
+      if (!(ch.acciones || []).includes("honor") || !ch.honor) continue;
+      if (!nombre.includes(String(ch.honor).toLowerCase())) continue;
+      const m = /honor\s*\([^)]*\)\s*\+\s*(\d+)/i.exec(ch.efecto || "");
+      const n = m ? Number(m[1]) : 1;
+      lista.push({ ataque: n, defensa: n, texto: `Honor (${ch.honor})`, dura: "aura" });
+    }
+  }
+  // Unidades acuarteladas: +1 ATK o +1 DEF cada una
+  for (const u of inst.acuartelados || []) {
+    lista.push(u.bonoCuartel === "atk" ? { ataque: 1, defensa: 0, texto: "Acuartelada", dura: "aura" } : { ataque: 0, defensa: 1, texto: "Acuartelada", dura: "aura" });
+  }
+  return lista;
+}
 function ataqueDe(g, inst) {
-  return Math.max(0, (carta(g, inst).ataque || 0) - inst.herida);
+  const b = bonos(g, inst).reduce((n, x) => n + x.ataque, 0);
+  return Math.max(0, (carta(g, inst).ataque || 0) + b - (inst.herida || 0));
 }
 function defensaDe(g, inst) {
-  return Math.max(0, (carta(g, inst).defensa || 0) - inst.contusion);
+  const b = bonos(g, inst).reduce((n, x) => n + x.defensa, 0);
+  return Math.max(0, (carta(g, inst).defensa || 0) + b - (inst.contusion || 0));
+}
+// Herramientas para los efectos de las cartas
+function herir(inst, n = 1) { inst.herida = (inst.herida || 0) + n; }
+function contusionar(inst, n = 1) { inst.contusion = (inst.contusion || 0) + n; }
+function curar(inst) { inst.herida = 0; inst.contusion = 0; } // Hospitalidad
+function modificar(inst, ataque, defensa, dura, texto, desde) {
+  if (!Array.isArray(inst.mods)) inst.mods = [];
+  inst.mods.push({ ataque: ataque || 0, defensa: defensa || 0, dura: dura || "siempre", texto: texto || "", desde: desde || "" });
+}
+function quitarMods(inst, filtro) { if (Array.isArray(inst.mods)) inst.mods = inst.mods.filter((m) => !filtro(m)); }
+// Todas las cartas de un tablero (también las acuarteladas, que cuentan como "en tablero")
+function cartasEnTablero(j) {
+  const out = [];
+  for (const c of [...j.batalla, ...j.defensa]) if (c) { out.push(c); for (const u of c.acuartelados || []) out.push(u); }
+  return out;
+}
+function duenoEnTablero(g, inst) {
+  for (const j of g.jugadores) if (cartasEnTablero(j).includes(inst)) return j;
+  return null;
 }
 function tieneAccion(g, inst, nombre) {
   return (carta(g, inst).acciones || []).includes(nombre);
@@ -212,6 +265,7 @@ function sacarDe(lista, uid) {
 }
 function limpiarInst(inst) {
   inst.herida = 0; inst.contusion = 0; inst.ataco = false; inst.salioDeReserva = false; inst.cambioPos = false; inst.pos = "atk";
+  inst.mods = []; // al salir del tablero se pierden potenciadores y disminuciones
 }
 
 // ------------------------------------------------------------------
@@ -247,25 +301,29 @@ function derrotar(g, inst, ev, equipoQueGana) {
   limpiarInst(inst);
   lugar.jug.mausoleo.push(inst);
   ev.push({ tipo: "derrotada", uid: inst.uid, carta: inst.carta, jugador: lugar.jug.asiento });
-  // Si era una estructura con unidades adentro: salen a casillas libres de batalla (las que no caben, al mausoleo).
-  // Cartas que dicen que las acuarteladas se van a la reserva (Santa Catedral) las mandan a la reserva.
+  // Estructura con unidades acuarteladas (reglamento): vuelven al tablero en la casilla de la estructura
+  // (y si no caben, en otras casillas libres) con 1 Herida si estaban en ATK o 1 Contusión si en DEF.
+  // Las que no quepan van al Mausoleo. Santa Catedral: las manda a la reserva.
   const dentro = Array.isArray(inst.acuartelados) ? inst.acuartelados : [];
   inst.acuartelados = [];
   const aReserva = /acuarteladas se env[ií]an al mazo de reserva/i.test(carta(g, inst).efecto || "");
+  const jd = lugar.jug;
+  const libres = [[lugar.zona, lugar.casilla]];
+  for (const z of ["defensa", "batalla"]) jd[z].forEach((c, k) => { if (!c && !(z === lugar.zona && k === lugar.casilla)) libres.push([z, k]); });
   for (const u of dentro) {
-    const j = lugar.jug;
     if (aReserva) {
-      limpiarInst(u); u.entroReserva = g.turno; j.reserva.push(u);
-      ev.push({ tipo: "sale_del_cuartel", jugador: j.asiento, uid: u.uid, carta: u.carta, a: "reserva" });
+      limpiarInst(u); u.entroReserva = g.turno; jd.reserva.push(u);
+      ev.push({ tipo: "sale_del_cuartel", jugador: jd.asiento, uid: u.uid, carta: u.carta, a: "reserva" });
       continue;
     }
-    const libre = j.batalla.findIndex((c) => !c);
-    if (libre >= 0) {
-      j.batalla[libre] = u;
-      ev.push({ tipo: "sale_del_cuartel", jugador: j.asiento, uid: u.uid, carta: u.carta, a: "batalla", casilla: libre, pos: u.pos });
+    const lib = libres.shift();
+    if (lib) {
+      if (u.pos === "def") contusionar(u); else herir(u);
+      jd[lib[0]][lib[1]] = u;
+      ev.push({ tipo: "sale_del_cuartel", jugador: jd.asiento, uid: u.uid, carta: u.carta, a: lib[0], casilla: lib[1], pos: u.pos, herida: u.pos !== "def", contusion: u.pos === "def" });
     } else {
-      limpiarInst(u); j.mausoleo.push(u);
-      ev.push({ tipo: "sale_del_cuartel", jugador: j.asiento, uid: u.uid, carta: u.carta, a: "mausoleo" });
+      limpiarInst(u); jd.mausoleo.push(u);
+      ev.push({ tipo: "sale_del_cuartel", jugador: jd.asiento, uid: u.uid, carta: u.carta, a: "mausoleo" });
     }
   }
   if (equipoQueGana !== undefined) darPuntos(g, equipoQueGana, carta(g, inst).pv || 0, ev, "derrota_en_combate");
@@ -302,6 +360,8 @@ function empezarTurno(g, ev) {
   }
 }
 function pasarTurno(g, ev) {
+  // El "Daño" (y todo lo que dura un turno) se borra al terminar el turno
+  for (const x of g.jugadores) for (const c of cartasEnTablero(x)) quitarMods(c, (m) => m.dura === "turno");
   g.actual = (g.actual + 1) % g.jugadores.length;
   empezarTurno(g, ev);
 }
@@ -326,6 +386,7 @@ function resolverAtaque(g, ev) {
   const atacante = lugarA.inst;
   const yo = lugarA.jug;
   atacante.ataco = true;
+  quitarMods(atacante, (m) => m.dura === "hasta_atacar"); // ej. Hacha Arrojadiza: dura hasta que ataca
 
   // Ataque directo
   if (a.directo !== undefined) {
@@ -480,6 +541,8 @@ function jugar(g, asiento, accion) {
       const c = carta(g, inst);
       const motivo = motivoNoCabe(regla, c);
       if (motivo) return mal(motivo);
+      // Reglamento: cada carta se puede acuartelar una vez por turno
+      if (inst.acuarteloTurno === g.turno) return mal("ya_se_acuartelo_este_turno");
       const rec = g.equipos[j.equipo].recursos;
       if (desde === "campo") {
         if (c.movil === false) return mal("carta_inmovil");
@@ -496,8 +559,11 @@ function jugar(g, asiento, accion) {
         inst.pos = accion.pos === "def" ? "def" : "atk";
         g.cont.bajadas++;
       }
+      // La estructura gana +1 ATK o +1 DEF por esta unidad (lo eliges tú; si no, DEF)
+      inst.bonoCuartel = accion.bono === "atk" ? "atk" : "def";
+      inst.acuarteloTurno = g.turno;
       est.acuartelados.push(inst);
-      ev.push({ tipo: "acuartelada", jugador: j.asiento, uid: inst.uid, carta: inst.carta, estructura: est.uid, desde });
+      ev.push({ tipo: "acuartelada", jugador: j.asiento, uid: inst.uid, carta: inst.carta, estructura: est.uid, desde, bono: inst.bonoCuartel });
       if (desde !== "campo" && c.genera) {
         for (const r of RECURSOS) rec[r] += c.genera[r] || 0;
         ev.push({ tipo: "genera", equipo: j.equipo, recursos: c.genera });
@@ -712,12 +778,14 @@ function jugar(g, asiento, accion) {
 function vistaCarta(g, inst) {
   if (!inst) return null;
   const regla = reglaCuartel(carta(g, inst));
-  const cuartel = regla ? { max: regla.max, unidades: (inst.acuartelados || []).map((u) => ({ uid: u.uid, carta: u.carta, pos: u.pos })) } : undefined;
+  const cuartel = regla ? { max: regla.max, especies: regla.especies, comun: regla.comun, espiritista: regla.espiritista, unidades: (inst.acuartelados || []).map((u) => ({ uid: u.uid, carta: u.carta, pos: u.pos, bono: u.bonoCuartel || "def", herida: u.herida || 0, contusion: u.contusion || 0 })) } : undefined;
   return {
     cuartel,
     uid: inst.uid, carta: inst.carta, pos: inst.pos,
     ataque: ataqueDe(g, inst), defensa: defensaDe(g, inst),
     herida: inst.herida, contusion: inst.contusion, ataco: inst.ataco,
+    base_ataque: carta(g, inst).ataque || 0, base_defensa: carta(g, inst).defensa || 0,
+    bonos: bonos(g, inst).filter((b) => b.ataque || b.defensa),
   };
 }
 function vistaPara(g, asiento) {
@@ -752,4 +820,6 @@ function eventosPara(eventos, asiento) {
   });
 }
 
-module.exports = { REGLAS, crearPartida, jugar, vistaPara, eventosPara, validarMazo };
+module.exports = { REGLAS, crearPartida, jugar, vistaPara, eventosPara, validarMazo,
+  // para los efectos de cartas y las pruebas
+  _h: { ataqueDe, defensaDe, herir, contusionar, curar, modificar, quitarMods, bonos, cartasEnTablero } };

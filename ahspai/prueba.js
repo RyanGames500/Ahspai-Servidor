@@ -506,21 +506,23 @@ prueba("desacuartelar a una casilla libre y atacar ese mismo turno", () => {
   ok(M.jugar(g, 0, { tipo: "ir_batalla" }), "batalla");
   ok(M.jugar(g, 0, { tipo: "atacar", uid: sol.uid, jugador: 1 }), "ataca directo");
 });
-prueba("si cae la estructura, las de adentro salen a la batalla (y las que no caben al mausoleo)", () => {
+prueba("si cae la estructura: vuelven a su casilla con herida/contusión y las que no caben al mausoleo", () => {
   const g = nueva("1v1", 2); enNucleo(g);
-  const est = poner(g, 1, "E05", "defensa", 0, "atk"); // en ataque, defensa por ataque 0
-  for (let i = 0; i < 2; i++) est.acuartelados = [...(est.acuartelados || []), { uid: g.sigUid++, carta: "P01", dueno: 1, pos: "atk", herida: 0, contusion: 0 }];
-  // Rival con la batalla casi llena: solo 1 casilla libre
-  for (let i = 1; i < 5; i++) poner(g, 1, "P04", "batalla", i, "def");
-  g.jugadores[1].batalla = g.jugadores[1].batalla; // casilla 0 libre
-  const yo = poner(g, 0, "P05", "batalla", 0, "atk");
+  const est = poner(g, 1, "E05", "defensa", 0, "atk"); // en ataque, defiende con su ataque
+  est.acuartelados = [
+    { uid: g.sigUid++, carta: "P01", dueno: 1, pos: "atk", herida: 0, contusion: 0, bonoCuartel: "def" },
+    { uid: g.sigUid++, carta: "P09", dueno: 1, pos: "def", herida: 0, contusion: 0, bonoCuartel: "def" },
+  ];
+  // Rival con todo lleno salvo la casilla de la estructura: solo cabe 1
+  for (let i = 1; i < 3; i++) poner(g, 1, "E01", "defensa", i, "def");
+  for (let i = 0; i < 5; i++) poner(g, 1, "E01", "batalla", i, "def");
+  const yo = poner(g, 0, "P06", "batalla", 0, "atk");
   ok(M.jugar(g, 0, { tipo: "ir_batalla" }), "batalla");
-  // Las unidades en defensa del rival bloquean atacar estructuras: las sacamos de la batalla
-  for (let i = 1; i < 5; i++) { g.jugadores[1].mausoleo.push(g.jugadores[1].batalla[i]); g.jugadores[1].batalla[i] = { uid: g.sigUid++, carta: "E01", dueno: 1, pos: "def" }; }
   const r = ok(M.jugar(g, 0, { tipo: "atacar", uid: yo.uid, objetivo: est.uid }), "atacar estructura");
   const salen = r.eventos.filter((e) => e.tipo === "sale_del_cuartel");
   igual(salen.length, 2, "salieron 2");
-  igual(salen[0].a, "batalla", "1ra a batalla");
+  igual(salen[0].a + salen[0].casilla, "defensa0", "1ra a la casilla de la estructura");
+  igual(g.jugadores[1].defensa[0].herida, 1, "estaba en ATK: 1 herida");
   igual(salen[1].a, "mausoleo", "2da no cabe");
 });
 prueba("Catedral: si cae, las acuarteladas van a la reserva", () => {
@@ -532,6 +534,64 @@ prueba("Catedral: si cae, las acuarteladas van a la reserva", () => {
   const r = ok(M.jugar(g, 0, { tipo: "atacar", uid: yo.uid, objetivo: est.uid }), "atacar");
   igual(r.eventos.find((e) => e.tipo === "sale_del_cuartel").a, "reserva", "a la reserva");
   igual(g.jugadores[1].reserva.length, 1, "reserva");
+});
+
+console.log("\nHerida, contusión, daño, potenciar y honor");
+const H = M._h;
+prueba("herida baja ataque, contusión baja defensa, nunca menos de 0", () => {
+  const g = nueva("1v1", 2);
+  const c = poner(g, 0, "P05", "batalla", 0, "atk"); // 4/3
+  H.herir(c, 2); H.contusionar(c, 5);
+  igual(H.ataqueDe(g, c), 2, "ataque"); igual(H.defensaDe(g, c), 0, "defensa en 0");
+  H.curar(c); igual(H.ataqueDe(g, c), 4, "hospitalidad cura");
+});
+prueba("daño del turno se borra al terminar el turno; potenciar permanente se queda", () => {
+  const g = nueva("1v1", 2); enNucleo(g);
+  const c = poner(g, 0, "P05", "batalla", 0, "atk");
+  H.modificar(c, 3, 0, "turno", "Coca"); H.modificar(c, 0, 5, "siempre", "Guallcanga");
+  igual(H.ataqueDe(g, c), 7, "con daño"); igual(H.defensaDe(g, c), 8, "con +5");
+  ok(M.jugar(g, 0, { tipo: "terminar_turno" }), "fin");
+  igual(H.ataqueDe(g, c), 4, "daño borrado"); igual(H.defensaDe(g, c), 8, "permanente sigue");
+  const v = M.vistaPara(g, 1).jugadores[0].batalla[0];
+  igual(v.bonos.length, 1, "la vista muestra el bono"); igual(v.base_defensa, 3, "base");
+});
+prueba("hasta atacar: se pierde al atacar", () => {
+  const g = nueva("1v1", 2);
+  const c = poner(g, 0, "P05", "batalla", 0, "atk");
+  H.modificar(c, 2, 0, "hasta_atacar", "Hacha");
+  irABatalla(g);
+  ok(M.jugar(g, 0, { tipo: "atacar", uid: c.uid, jugador: 1 }), "ataca");
+  if (g.ataque) ok(M.jugar(g, 1, { tipo: "responder" }), "pasa");
+  igual(H.ataqueDe(g, c), 4, "ya no tiene el +2");
+});
+prueba("al ir a la reserva se pierden heridas y bonos", () => {
+  const g = nueva("1v1", 2); enNucleo(g);
+  const c = poner(g, 0, "P01", "batalla", 0, "atk");
+  H.herir(c); H.modificar(c, 2, 2, "siempre", "x");
+  ok(M.jugar(g, 0, { tipo: "a_reserva", uid: c.uid }), "a reserva");
+  igual(c.herida, 0, "sin herida"); igual(c.mods.length, 0, "sin bonos");
+});
+prueba("Honor (Hampatu) +1 con cartas reales", () => {
+  const R = require("./cartas.js");
+  const g = nueva("1v1", 2);
+  g.cartas = { ...g.cartas, ...R };
+  const pone = (as, id, z, k) => { const x = { uid: g.sigUid++, carta: id, dueno: as, pos: "atk", herida: 0, contusion: 0 }; g.jugadores[as][z][k] = x; return x; };
+  const aclla = pone(0, "AHA-28", "batalla", 0);
+  const base = R["AHA-28"].ataque;
+  igual(H.ataqueDe(g, aclla), base + 1, "se da honor a sí misma");
+  const rival = pone(1, "AHA-28", "batalla", 1);
+  igual(H.ataqueDe(g, rival), base + 1, "el rival tiene su propio honor, no suma el mío");
+});
+prueba("acuartelar: +1 DEF o ATK a la estructura y una vez por turno", () => {
+  const g = nueva("1v1", 2); enNucleo(g);
+  const est = poner(g, 0, "E05", "defensa", 1, "def"); // def 4
+  const a = poner(g, 0, "P01", "batalla", 0, "atk"), b = poner(g, 0, "P09", "batalla", 1, "atk");
+  ok(M.jugar(g, 0, { tipo: "acuartelar", uid: a.uid, estructura: est.uid, bono: "def" }), "a");
+  ok(M.jugar(g, 0, { tipo: "acuartelar", uid: b.uid, estructura: est.uid, bono: "atk" }), "b");
+  igual(H.defensaDe(g, est), 5, "+1 def"); igual(H.ataqueDe(g, est), 1, "+1 atk");
+  ok(M.jugar(g, 0, { tipo: "desacuartelar", uid: a.uid, zona: "batalla", casilla: 0 }), "saca a");
+  igual(H.defensaDe(g, est), 4, "pierde el bono al salir");
+  igual(M.jugar(g, 0, { tipo: "acuartelar", uid: a.uid, estructura: est.uid }).error, "ya_se_acuartelo_este_turno", "1 vez por turno");
 });
 
 console.log(`\n${pasaron} pasaron, ${fallaron} fallaron\n`);
