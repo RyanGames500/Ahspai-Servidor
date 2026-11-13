@@ -13,6 +13,11 @@
 // cuentas.js usando require("./regalo.js") dentro de coleccionRegalo).
 "use strict";
 
+// Las 37 cartas nuevas (AHAHO/ENCUENTRO) que antes no estaban en cartas.js.
+// Al requerir este archivo se unen solas a cartas.js (misma instancia de modulo),
+// asi el servidor y esta prueba las ven sin tocar cartas.js.
+require("./cartas_faltantes.js");
+
 // Escrituras de Ryan -> nombre como esta en cartas.js (solo las que hacen falta)
 const ALIASES = {
   "ama sua ama quella": "ama sua ama llulla ama quella",
