@@ -4,6 +4,8 @@ const M = require("./motor.js"), C = require("./cartas.js");
 const ids = Object.keys(C);
 const lim = (c) => c.sobrenatural ? 2 : c.tipo === "estructura" ? 3 : ({ peon: 4, belico: 3, heroe: 3, lider: 1 })[c.alineamiento] ?? 3;
 const pick = (f, n, desde = 0) => { const out = []; const L = [...ids.slice(desde), ...ids.slice(0, desde)]; for (const id of L) { const c = C[id]; if (!f(c)) continue; for (let k = 0; k < lim(c) && out.length < n; k++) out.push(id); } return out; };
+// node sim_efectos.js 300 regalo  -> juega con los mazos de regalo AHAHO vs ENCUENTRO
+const REGALO = process.argv[3] === "regalo" ? (() => { const R = require("./regalo.js"), K = require("./cuentas.js"); return ["AHAHO", "ENCUENTRO"].map((e) => { const m = K.mazoInicial(R.coleccion(e, C)); return { principal: m.principal, sobrenatural: m.sobrenatural, recursos: m.recursos }; }); })() : null;
 const mazoAzar = (s) => ({ principal: pick((c) => c.tipo !== "estructura" && !c.sobrenatural, 40, s), sobrenatural: pick((c) => c.sobrenatural, 12, s), recursos: pick((c) => c.tipo === "estructura", 12, s) });
 const rnd = (n) => Math.floor(Math.random() * n), uno = (a) => a[rnd(a.length)];
 const total = (j) => ["principal", "recursos", "sobrenatural", "mano", "reserva", "mausoleo", "reciclaje", "abismo"].reduce((n, z) => n + j[z].length, 0)
@@ -12,7 +14,7 @@ const cuenta = (c) => 1 + [...(c.acuartelados || []), ...(c.equipos || [])].redu
 const N = Number(process.argv[2] || 300);
 let fin = 0, turnos = 0, errores = {}, efErr = {}, usados = {}, perdidas = 0, atascadas = 0;
 for (let p = 0; p < N; p++) {
-  const g = M.crearPartida({ modo: "1v1", jugadores: [{ id: 1, mazo: mazoAzar(rnd(ids.length)) }, { id: 2, mazo: mazoAzar(rnd(ids.length)) }] }, C);
+  const g = M.crearPartida({ modo: "1v1", jugadores: REGALO ? [{ id: 1, mazo: REGALO[p % 2] }, { id: 2, mazo: REGALO[(p + 1) % 2] }] : [{ id: 1, mazo: mazoAzar(rnd(ids.length)) }, { id: 2, mazo: mazoAzar(rnd(ids.length)) }] }, C);
   const inicial = g.jugadores.map(total);
   // Toda jugada pasa por aquí: resuelve las preguntas de las cartas al azar
   const J = (s, a) => {

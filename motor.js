@@ -77,7 +77,8 @@ function bonos(g, inst) {
   // Efectos "(En tablero)" de otras cartas (auras): ver efectos.js
   if (j) {
     for (const x of g.jugadores) {
-      const fuentes = [...cartasEnTablero(x), ...x.permanentes.filter((c) => c && !c.bocaAbajo)];
+      const enTab = cartasEnTablero(x);
+      const fuentes = [...enTab, ...enTab.flatMap((c) => c.equipos || []), ...x.permanentes.filter((c) => c && !c.bocaAbajo)];
       for (const f of fuentes) {
         const d = EF.cartas[f.carta];
         if (!d || !d.aura) continue;
@@ -316,13 +317,23 @@ function soltarEquipos(g, inst, ev) {
 function derrotar(g, inst, ev, equipoQueGana) {
   const lugar = buscarEnCampo(g, inst.uid);
   if (!lugar) return;
+  // Una carta puede morir en su lugar (Curandero Chamán)
+  for (const c of cartasEnTablero(lugar.jug)) {
+    const d = EF.cartas[c.carta];
+    if (c !== inst && d && d.reemplaza && d.reemplaza(g, c, inst)) {
+      ev.push({ tipo: "reemplaza", uid: c.uid, carta: c.carta, salva: inst.uid });
+      return derrotar(g, c, ev, equipoQueGana);
+    }
+  }
+  const matador = g._matador && g._matador !== inst ? g._matador : null;
+  const nAcuartelados = (inst.acuartelados || []).length;
   lugar.jug[lugar.zona][lugar.casilla] = null;
   // Reglamento: al morir la unidad equipada, se descartan sus equipos
   soltarEquipos(g, inst, ev);
   limpiarInst(inst);
   g.jugadores[inst.dueno] ? g.jugadores[inst.dueno].mausoleo.push(inst) : lugar.jug.mausoleo.push(inst);
   ev.push({ tipo: "derrotada", uid: inst.uid, carta: inst.carta, jugador: lugar.jug.asiento });
-  disparar(g, inst, "alDerrotar", inst.dueno !== undefined ? inst.dueno : lugar.jug.asiento); // "(En tablero/mausoleo): al ser derrotada..."
+  disparar(g, inst, "alDerrotar", inst.dueno !== undefined ? inst.dueno : lugar.jug.asiento, { acuartelados: nAcuartelados }); // "(En tablero/mausoleo): al ser derrotada..."
   // Estructura con unidades acuarteladas (reglamento): vuelven al tablero en la casilla de la estructura
   // (y si no caben, en otras casillas libres) con 1 Herida si estaban en ATK o 1 Contusión si en DEF.
   // Las que no quepan van al Mausoleo. Santa Catedral: las manda a la reserva.
@@ -348,7 +359,13 @@ function derrotar(g, inst, ev, equipoQueGana) {
       ev.push({ tipo: "sale_del_cuartel", jugador: jd.asiento, uid: u.uid, carta: u.carta, a: "mausoleo" });
     }
   }
-  if (equipoQueGana !== undefined) darPuntos(g, equipoQueGana, carta(g, inst).pv || 0, ev, "derrota_en_combate");
+  if (equipoQueGana !== undefined) {
+    let pv = carta(g, inst).pv || 0;
+    const dm = matador && EF.cartas[matador.carta];
+    if (dm && dm.pvAlDerrotar) pv = dm.pvAlDerrotar(g, matador, inst, pv);
+    darPuntos(g, equipoQueGana, pv, ev, "derrota_en_combate");
+  }
+  if (matador) { const jm = duenoEnTablero(g, matador); if (jm) disparar(g, matador, "alDerrotarOtra", jm.asiento, { victima: inst }); }
 }
 
 // ------------------------------------------------------------------
@@ -410,7 +427,9 @@ function resolverAtaque(g, ev) {
   const yo = lugarA.jug;
   // Agrupar: el grupo ataca junto (los que sigan en el campo)
   const grupo = [atacante, ...(a.grupo || []).map((u) => buscarEnCampo(g, u)).filter((l) => l && l.jug === yo).map((l) => l.inst)];
-  const atk = grupo.reduce((n, c) => n + ataqueDe(g, c), 0); // se calcula antes de quitar los bonos "hasta atacar"
+  const objetivoInst = a.objetivo !== undefined ? (buscarEnCampo(g, a.objetivo) || {}).inst : null;
+  const extraCombate = (c, otro, rol) => { const d = EF.cartas[c.carta]; const r = d && d.combate && otro ? d.combate(g, c, otro, rol) : null; return r ? (rol === "defiende" ? r.defensa || 0 : r.ataque || 0) : 0; };
+  const atk = grupo.reduce((n, c) => n + ataqueDe(g, c) + extraCombate(c, objetivoInst, "ataca"), 0); // se calcula antes de quitar los bonos "hasta atacar"
   for (const c of grupo) {
     c.ataco = true;
     quitarMods(c, (m) => m.dura === "hasta_atacar"); // ej. Hacha Arrojadiza: dura hasta que ataca
@@ -434,28 +453,32 @@ function resolverAtaque(g, ev) {
   const esEstructura = carta(g, defensor).tipo === "estructura";
   let resultado;
 
+  g._matador = atacante; // para efectos "al derrotar a una carta" (Carlos I, Pizarro, Pedro...)
   if (defensor.pos === "def") {
-    const def = defensaDe(g, defensor);
+    const def = defensaDe(g, defensor) + extraCombate(defensor, atacante, "defiende");
     // Estructuras: si el ataque iguala la defensa, también cae
     const cae = esEstructura ? atk >= def : atk > def;
     resultado = cae ? "defensor_derrotado" : "nulo";
     ev.push({ tipo: "combate", atacante: atacante.uid, grupo: a.grupo, objetivo: defensor.uid, ataque: atk, defensa: def, resultado });
     if (cae) { derrotar(g, defensor, ev, yo.equipo); penetrar(g, grupo, defensor, rival, yo, atk - def, ev); }
   } else {
-    const atkRival = ataqueDe(g, defensor);
+    const atkRival = ataqueDe(g, defensor) + extraCombate(defensor, atacante, "ataca");
     resultado = atk > atkRival ? "defensor_derrotado" : atk === atkRival ? "ambos_derrotados" : "atacante_derrotado";
     ev.push({ tipo: "combate", atacante: atacante.uid, grupo: a.grupo, objetivo: defensor.uid, ataque: atk, ataqueRival: atkRival, resultado });
     if (resultado !== "atacante_derrotado") derrotar(g, defensor, ev, yo.equipo);
     if (resultado !== "defensor_derrotado") for (const c of grupo) derrotar(g, c, ev, rival.equipo); // si pierde el grupo, caen todos
     if (resultado === "defensor_derrotado") penetrar(g, grupo, defensor, rival, yo, atk - atkRival, ev);
   }
+  g._matador = null;
+  // Después de atacar (Viejo Camac: pasa a defensa)
+  for (const c of grupo) { const d = EF.cartas[c.carta]; if (d && d.trasAtacar && buscarEnCampo(g, c.uid)) d.trasAtacar(g, c, ev); }
 }
 
 // Inbloqueable: daño de penetración. Lo que sobra del ataque va a una estructura del rival
 // (cae si alcanza su defensa) o, si no tiene estructuras, es un ataque directo. Inamovible lo anula.
 function penetrar(g, grupo, defensor, rival, yo, sobra, ev) {
   if (sobra <= 0 || g.fase === "terminada") return;
-  if (!grupo.some((c) => tieneAccion(g, c, "inbloqueable") || c.inbloqueable)) return;
+  if (!grupo.some((c) => tieneAccion(g, c, "inbloqueable") || tieneAccion(g, c, "imbloqueable") || c.inbloqueable)) return;
   if (tieneAccion(g, defensor, "inamovible")) { ev.push({ tipo: "penetracion_anulada", uid: defensor.uid }); return; }
   const est = rival.defensa.filter((c) => c && carta(g, c).tipo === "estructura").sort((x, y) => defensaDe(g, x) - defensaDe(g, y))[0];
   if (est) {
@@ -593,6 +616,8 @@ function candidatos(g, ctx, de, f) {
         // Cartas que no pueden ser afectadas por este efecto (ej. Furufurhue en defensa)
         const di = EF.cartas[inst.carta];
         const cf = g.cartas[ctx.carta] || {};
+        // Inalcanzable: no la afectan efectos de cartas de agua, viento, tierra ni fuego
+        if (["tablero", "campo"].includes(d.zona) && tieneAccion(g, inst, "inalcanzable") && inst.uid !== ctx.fuente && (cf.elemento || []).some((e) => ["agua", "viento", "tierra", "fuego"].includes(e))) continue;
         if (cf.tipo === "suceso" && ["tablero", "campo"].includes(d.zona) && tieneAccion(g, inst, "imparable") && inst.uid !== ctx.fuente) continue;
         if (di && di.inmune && ["tablero", "campo"].includes(d.zona) && di.inmune(g, inst, ctx)) continue;
         out.push({ inst, jugador: j.asiento, zona: d.zona });
@@ -762,8 +787,9 @@ function activarCarta(g, j, inst, lugar, ev, como) {
 
 // Costos extra (sacrificios, requisitos): los define efectos.js con { puede(g, j, inst), pasos }
 function extraOk(g, j, inst) {
-  const k = carta(g, inst); if (!k.costoExtra) return true;
+  const k = carta(g, inst);
   const d = (EF.cartas[inst.carta] || {}).costoExtra;
+  if (!k.costoExtra && !d) return true;
   return !!(d && d.puede(g, j, inst));
 }
 function pagarExtra(g, j, inst) {
@@ -881,6 +907,7 @@ function jugarInterno(g, asiento, accion) {
       ev.push({ tipo: "bajada", jugador: j.asiento, uid: inst.uid, carta: inst.carta, zona, casilla, pos: inst.pos, costo });
       pagarExtra(g, j, inst); // primero se paga el costo extra (va primero en la cola)
       disparar(g, inst, "alBajar", j.asiento); // efecto "(Al bajar)"
+      if (tieneAccion(g, inst, "lealtad") && EF.lealtad) encolar(g, j.asiento, inst, EF.lealtad(g, inst), "lealtad");
       // Las unidades generan al bajar (las estructuras bajadas NO generan)
       if (c.tipo === "unidad" && c.genera) {
         for (const r of RECURSOS) rec[r] += c.genera[r] || 0;

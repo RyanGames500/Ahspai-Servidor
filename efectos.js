@@ -354,6 +354,214 @@ module.exports = function (M) {
         ["Sí", [fn((gg, c, ev, yo) => { M.mover(gg, inst, "mausoleo", null, ev); for (const r of M.rivales(gg, yo)) r.sinBatallaHasta = gg.turno + gg.jugadores.length; ev.push({ tipo: "batalla_anulada", por: yo.asiento }); })]],
         ["No", []]])] },
     },
+
+    // ================= CARTAS NUEVAS DE LOS MAZOS DE REGALO =================
+    // ---------- AHAHO ----------
+    "AHA-01": { // Manco Capac: +1 PV al derrotar Especial; +1 ATK/DEF contra OSCURIDAD
+      pvAlDerrotar: (g, yo, v, pv) => pv + (es(g, v, { tipo: "unidad", clase: "especial" }) ? 1 : 0),
+      combate: (g, yo, otro) => ((carta(g, otro).elemento || []).includes("oscuridad") ? { ataque: 1, defensa: 1 } : null),
+    },
+    "AHA-02": { // Viejo Camac
+      aura: (g, f, jf, o) => {
+        if (o !== f || !enZona(jf, f, "batalla")) return null;
+        const n = jf.mausoleo.filter((c) => es(g, c, { tipo: "unidad", nombre: "inca" })).length;
+        if (!n) return null;
+        return g.jugadores[g.actual] === jf ? { ataque: n } : { defensa: n };
+      },
+      trasAtacar: (g, inst, ev) => { inst.pos = "def"; ev.push({ tipo: "cambio", uid: inst.uid, pos: "def", motivo: "viejo_camac" }); },
+      pvAlDerrotar: (g, yo, v, pv) => Math.min(pv, 1),
+    },
+    "AHA-03": { // Quirquincho: al morir se equipa a una humana (+1 DEF)
+      alDerrotar: [elegir(Y("campo"), HUM, { max: 1, titulo: "Quirquincho: equípalo a una Unidad Humana (+1 DEF)" }),
+        fn((g, ctx, ev, yo) => {
+          const obj = [...yo.mausoleo].reverse().find((c) => c.uid === ctx.fuente); if (!obj) return;
+          const o = sel(ctx)[0];
+          if (o) { M.equiparA(g, obj, o, ev, [{ defensa: 1 }]); return; }
+          const k = M.casillaLibre(yo, "permanentes");
+          if (k >= 0) { yo.mausoleo.splice(yo.mausoleo.indexOf(obj), 1); yo.permanentes[k] = obj; ev.push({ tipo: "movida", uid: obj.uid, carta: obj.carta, de: "mausoleo", a: "permanentes", jugador: yo.asiento }); }
+        })],
+      // Desde la zona de permanentes se puede equipar después
+      usar: { etapas: ["nucleo1", "nucleo2"], pasos: (g, ctx, inst) => [elegir(Y("campo"), HUM, { min: 1, titulo: "Equipa el Quirquincho a una Unidad Humana" }),
+        fn((gg, c, ev, yo) => { const o = sel(c)[0]; const k = yo.permanentes.indexOf(inst); if (!o || k < 0) return; yo.permanentes[k] = null; M.equiparA(gg, inst, o, ev, [{ defensa: 1 }]); })] },
+    },
+    "AHA-07": { alBajar: [elegir(T("campo"), { tipo: "unidad", clase: COM_ESP, maxAtaque: 3 }, { min: 1, titulo: "Lariku: envía al Mausoleo una Unidad Común/Especial (ATK 3 o menos)" }), enviarSel("mausoleo")] },
+    "AHA-08": { aura: (g, f, jf, o, jo) => (jf === jo && es(g, o, { elemento: "agua" }) ? { defensa: 1 } : null) }, // Aclla de Mama Cocha
+    "AHA-09": { // Curandero Chamán: muere en lugar de una humana tuya (si esa vale más)
+      reemplaza: (g, cur, muerta) => enZona(M.ubicar(g, cur.uid).jug, cur, "batalla") && es(g, muerta, HUM) && (carta(g, muerta).pv || 0) > (carta(g, cur).pv || 0),
+    },
+    "AHA-14": { // Warakusi
+      usar: { etapas: ["nucleo1", "nucleo2", "batalla"], pasos: (g, ctx) => {
+        const yo = g.jugadores[ctx.jugador]; if (g.equipos[yo.equipo].recursos.capital < 1) return [];
+        return [elegir(T("campo"), HUM_ANI, { titulo: "Warakusi: paga 1 Capital y hiere 1" }), fn((gg, c) => { if (sel(c).length) gg.equipos[yo.equipo].recursos.capital -= 1; }), herirSel(1)];
+      } },
+    },
+    "AHA-20": { // Caña con Ruda
+      alActivar: [opcion("Caña con Ruda: elige un efecto", [
+        ["Anula un Objeto de OSCURIDAD equipado a una Humana", [
+          elegir(T("campo"), { ...HUM, si: (g, x) => (x.equipos || []).some((e) => es(g, e, { tipo: "objeto", elemento: "oscuridad" })) }, { min: 1, titulo: "¿A qué Humana le quitas el objeto de OSCURIDAD?" }),
+          cadaSel((g, x, ev) => { for (const e of [...(x.equipos || [])]) if (es(g, e, { tipo: "objeto", elemento: "oscuridad" })) { M.mover(g, e, "mausoleo", null, ev); x.soloDefensa = (x.equipos || []).some((q) => q.carta === "AHA-22"); } })]],
+        ["-2 ATK o DEF a una Sobrenatural de OSCURIDAD este turno", [elegir(T("campo"), { tipo: "unidad", sobrenatural: true, elemento: "oscuridad" }, { min: 1 }),
+          opcion("¿Ataque o defensa?", [["-2 de ataque", [cadaSel((g, x) => M.modificar(x, -2, 0, "turno", "Caña con Ruda"))]], ["-2 de defensa", [cadaSel((g, x) => M.modificar(x, 0, -2, "turno", "Caña con Ruda"))]]])]],
+      ])],
+    },
+    "AHA-21": { // Cerbatana Guaraní
+      alActivar: [opcion("Cerbatana Guaraní", [
+        ["2 de Herida a una Humana o Animal Común/Especial", [elegir(T("campo"), { ...HUM_ANI, clase: COM_ESP }, { min: 1 }), herirSel(2)]],
+        ["Equiparla a una Unidad Humana (+1 ATK)", [elegir(T("campo"), HUM, { min: 1 }), fn((g, ctx, ev) => { const o = sel(ctx)[0]; const obj = g.jugadores[ctx.jugador].reciclaje.find((c) => c.uid === ctx.fuente); if (o && obj) M.equiparA(g, obj, o, ev, [{ ataque: 1 }]); })]],
+      ])],
+      equipa: { objetivo: HUM, mods: [{ ataque: 1 }] },
+    },
+    "AHA-24": { // Huaca Hampatu
+      alActivar: (g, ctx) => {
+        const yo = g.jugadores[ctx.jugador];
+        const pasos = [];
+        if (M.cartasEnTablero(yo).some((c) => es(g, c, { tipo: "unidad", elemento: "agua" }))) {
+          const uno = opcion("Huaca Hampatu: genera 1 recurso", [["Alimento", [ganar({ alimento: 1 })]], ["Capital", [ganar({ capital: 1 })]], ["Creencia", [ganar({ creencia: 1 })]]]);
+          pasos.push(uno, uno);
+        }
+        pasos.push(elegir(T("campo"), { tipo: "unidad", alineamiento: "espiritista" }, { max: 1, titulo: "Equipa la Huaca a una Unidad Espiritista" }),
+          fn((gg, c, ev) => { const o = sel(c)[0]; const obj = yo.reciclaje.find((x) => x.uid === c.fuente); if (o && obj) M.equiparA(gg, obj, o, ev, []); }));
+        return pasos;
+      },
+      equipa: { objetivo: { tipo: "unidad", alineamiento: "espiritista" }, mods: [] },
+      aura: (g, f, jf, o) => { const l = M.ubicar(g, f.uid); return l && l.zona === "equipo" && es(g, o, { elemento: "agua" }) ? { ataque: 2, defensa: 2 } : null; },
+    },
+    "AHA-26": { // Choque Cultural
+      alActivar: [fn((g, ctx, ev, yo) => {
+        const r = M.rivales(g, yo)[0]; if (!r) return;
+        const a = r.mano.length ? r.mano[Math.floor(Math.random() * r.mano.length)] : null;
+        const b = yo.mano.length ? yo.mano[Math.floor(Math.random() * yo.mano.length)] : null;
+        if (a) { r.mano.splice(r.mano.indexOf(a), 1); yo.mano.push(a); ev.push({ tipo: "carta_robada", de: r.asiento, a: yo.asiento, uid: a.uid }); }
+        if (b) { yo.mano.splice(yo.mano.indexOf(b), 1); r.mano.push(b); ev.push({ tipo: "carta_robada", de: yo.asiento, a: r.asiento, uid: b.uid }); }
+      })],
+    },
+    "AHA-29": { // Reagrupación Militar
+      alActivar: [opcion("Reagrupación Militar", [
+        ["Devuelve tu mano al mazo, mezcla y saca 5", [fn((g, ctx, ev, yo) => { for (const c of [...yo.mano]) M.mover(g, c, "principal", null, ev); M.barajar(yo.principal); for (let i = 0; i < 5; i++) M.robar(g, yo, "principal", ev); })]],
+        ["Invierte las posiciones de tus cartas", [fn((g, ctx, ev, yo) => { for (const c of [...yo.batalla, ...yo.defensa]) if (c && carta(g, c).tipo === "unidad" && !c.soloDefensa) { c.pos = c.pos === "atk" ? "def" : "atk"; ev.push({ tipo: "cambio", uid: c.uid, pos: c.pos }); } })]],
+      ])],
+    },
+    "AHA-35": { // Mama Cocha
+      costoExtra: { puede: (g, j) => M.cartasEnTablero(j).some((c) => es(g, c, { tipo: "unidad", alineamiento: "espiritista" })) }, // requisito
+      alBajar: [elegir(Y("principal"), { elemento: "agua" }, { min: 1, titulo: "Mama Cocha: una carta de AGUA a tu mano" }), mover("mano")],
+      aura: (g, f, jf, o) => (es(g, o, { elemento: "fuego" }) ? { ataque: -2, defensa: -2 } : null),
+    },
+    "AHA-36": { // Olum el Restaurador
+      alBajar: (g, ctx) => {
+        const HCE = { ...HUM, clase: COM_ESP };
+        return [elegir([Y("mausoleo"), Y("abismo")], HCE, { max: 5, titulo: "Olum: elige hasta 5 Humanas Común/Especial", guardar: "todas" }),
+          fn((gg, c) => { if (!sel(c, "todas").length) c.pasos.length = 0; }),
+          elegir([Y("mausoleo"), Y("abismo")], { ...HCE, si: (gg, x) => sel(ctx, "todas").includes(x) }, { max: 3, titulo: "De esas, hasta 3 para colocar en el tablero", guardar: "col" }),
+          mover("colocar", "col"),
+          fn((gg, c, ev) => { for (const x of sel(c, "todas")) if (!sel(c, "col").includes(x)) M.mover(gg, x, "principal", null, ev); })];
+      },
+    },
+    "AHA-38": { // Vichama Iracundo
+      aura: (g, f, jf, o, jo) => {
+        if (jo === jf || g.etapa !== "batalla" || !es(g, o, HUM)) return null;
+        return g.jugadores[g.actual] === jf ? { defensa: -99 } : { ataque: -3 };
+      },
+      alDerrotar: [elegir(Y("principal"), { nombre: "huevo" }, { min: 1, titulo: "Vichama: una carta con Huevo a tu mano (se activa gratis)" }), mover("mano"), activarGratis()],
+    },
+    // ---------- ENCUENTRO ----------
+    "ENC-08": { combate: (g, yo, otro, rol) => (rol === "ataca" && carta(g, otro).tipo === "estructura" ? { ataque: 3 } : null) }, // Cerdos de Batalla
+    "ENC-09": { // Carlos I
+      alDerrotarOtra: (g, ctx, inst, extra) => {
+        const v = extra && extra.victima; if (!v) return [];
+        const r = {}; if (es(g, v, { clase: "imperial" })) r.capital = 2; if (es(g, v, { especie: "animal" })) r.alimento = 2; if (es(g, v, { elemento: "oscuridad" })) r.creencia = 2;
+        return Object.keys(r).length ? [ganar(r)] : [];
+      },
+    },
+    "ENC-11": { // Pedro Espada Ejecutora: elige sumar los PV de la víctima a su ataque en vez de ganarlos
+      pvAlDerrotar: (g, yo, v, pv) => {
+        if (!pv) return pv;
+        const j = M.ubicar(g, yo.uid); if (!j) return pv;
+        M.encolar(g, j.jug.asiento, yo, [opcion(`Pedro: ¿${pv} puntos de victoria o +${pv} de ataque?`, [
+          [`Ganar ${pv} puntos de victoria`, [fn((gg, c, ev, y) => M.darPuntos(gg, y.equipo, pv, ev, "derrota_en_combate"))]],
+          [`+${pv} de ataque hasta su próximo ataque`, [fn((gg) => M.modificar(yo, pv, 0, "hasta_atacar", "Pedro Espada Ejecutora"))]]])], "pedro");
+        return 0;
+      },
+    },
+    "ENC-13": { // Francisco Pizarro
+      alDerrotarOtra: (g, ctx, inst, extra) => (extra && extra.victima && es(g, extra.victima, { clase: "imperial" })
+        ? [elegir(Y("principal"), { tipo: "unidad", clase: COM_ESP, maxAtaque: 4 }, { max: 1, titulo: "Pizarro: coloca una Común/Especial (ATK 4 o menos) de tu mazo" }), mover("colocar")] : []),
+    },
+    "ENC-15": { // Convertir al Catolicismo
+      alActivar: [elegir(R("campo"), { ...HUM, clase: COM_ESP }, { min: 1, titulo: "Toma para siempre una Humana Común/Especial del oponente" }),
+        cadaSel((g, inst, ev, yo) => { if (M.mover(g, inst, "colocar", yo, ev)) { inst.dueno = yo.asiento; ev.push({ tipo: "control", uid: inst.uid, jugador: yo.asiento }); } })],
+    },
+    "ENC-16": { // Exorcismo Divino
+      alActivar: [
+        elegir([T("campo"), T("sobrenatural")], { tipo: "unidad", sobrenatural: true, elemento: "oscuridad", maxAtaque: 6 }, { min: 1, titulo: "Exorcismo: una Sobrenatural de OSCURIDAD (ATK 6 o menos) al Mausoleo", guardar: "x" }),
+        fn((g, ctx) => { const x = sel(ctx, "x")[0]; ctx.vars.val = x ? { ataque: M.ataqueDe(g, x), defensa: M.defensaDe(g, x) } : { ataque: 0, defensa: 0 }; }),
+        enviarSel("mausoleo", "x"),
+        opcion("¿Repartes su ataque o su defensa?", [["Su ataque", [fn((g, ctx) => { ctx.vars.n = ctx.vars.val.ataque; ctx.vars.tipo = "ataque"; })]], ["Su defensa", [fn((g, ctx) => { ctx.vars.n = ctx.vars.val.defensa; ctx.vars.tipo = "defensa"; })]]]),
+        elegir(Y("campo"), { tipo: "unidad", especie: "animal" }, { max: 3, titulo: "Hasta 3 Animales reciben esos puntos", guardar: "an" }),
+        fn((g, ctx) => { const an = sel(ctx, "an"); if (!an.length) return; const n = ctx.vars.n || 0; an.forEach((a, i) => { const k = Math.floor(n / an.length) + (i < n % an.length ? 1 : 0); if (k) M.modificar(a, ctx.vars.tipo === "ataque" ? k : 0, ctx.vars.tipo === "defensa" ? k : 0, "siempre", "Exorcismo Divino"); }); }),
+        elegir([Y("principal"), Y("mano")], { ...HUM, maxAtaque: 3 }, { max: 1, titulo: "Coloca una Humana (ATK 3 o menos) en tu tablero", guardar: "h" }), mover("colocar", "h"),
+      ],
+    },
+    "ENC-18": { alActivar: [elegir(T("campo"), { tipo: "unidad", clase: COM_ESP, maxAtkODef: 5 }, { min: 1, titulo: "Pena de Muerte: una Común/Especial (ATK o DEF 5 o menos) al Mausoleo" }), enviarSel("mausoleo")] },
+    "ENC-21": { alActivar: [fn((g, ctx, ev) => { for (const j of g.jugadores) for (const c of [...j.defensa, ...j.batalla]) if (c && carta(g, c).tipo === "estructura" && carta(g, c).alineamiento !== "sagrado") M.derrotar(g, c, ev); })] }, // Terremoto Divino
+    "ENC-22": { // Trato con Mandinga
+      costoExtra: {
+        puede: (g, j) => [...j.mano, ...M.cartasEnTablero(j)].some((c) => es(g, c, { ...HUM, si: (gg, x) => (carta(gg, x).ataque || 0) >= 2 })),
+        pasos: [elegir([Y("mano"), Y("campo")], { ...HUM, si: (g, x) => (carta(g, x).ataque || 0) >= 2 }, { min: 1, max: 1, titulo: "Trato con Mandinga: sacrifica una Humana (ATK 2 o más)", guardar: "s" }), enviarSel("mausoleo", "s")],
+      },
+      alActivar: [elegir(T("campo"), { si: (g, x) => es(g, x, HUM) || (es(g, x, { tipo: "estructura" }) && !es(g, x, { elemento: ["luz", "oscuridad"] })) }, { min: 1, titulo: "Envía al Mausoleo una Humana o una Estructura (no LUZ ni OSCURIDAD)" }), enviarSel("mausoleo")],
+    },
+    "ENC-23": { alActivar: [fn((g, ctx, ev, yo) => { const n = M.cartasEnTablero(yo).some((c) => es(g, c, { tipo: "unidad", alineamiento: "espiritista" })) ? 5 : 3; g.equipos[yo.equipo].recursos.creencia += n; ev.push({ tipo: "genera", equipo: yo.equipo, recursos: { creencia: n } }); })] }, // Sagrada Biblia
+    "ENC-24": { // Montura: la humana monta al animal (el animal suma su ataque)
+      alActivar: [elegir(Y("campo"), { tipo: "unidad", especie: "animal", clase: COM_ESP, maxAtkODef: 4 }, { min: 1, titulo: "Montura: elige el Animal", guardar: "an" }),
+        elegir(Y("campo"), HUM, { min: 1, titulo: "Elige la Unidad Humana que lo monta", guardar: "h" }),
+        fn((g, ctx, ev, yo) => {
+          const an = sel(ctx, "an")[0], h = sel(ctx, "h")[0]; const obj = yo.reciclaje.find((c) => c.uid === ctx.fuente); if (!an || !h || !obj) return;
+          M.equiparA(g, obj, an, ev, []);
+          M.equiparA(g, h, an, ev, [{ ataque: M.ataqueDe(g, h) }]);
+        })],
+      equipa: { objetivo: { tipo: "unidad", especie: "animal" }, mods: [] },
+    },
+    "ENC-25": { // Peto del Conquistador
+      alActivar: [elegir(T("campo"), HUM, { min: 1, titulo: "Equipa el Peto a una Unidad Humana (+2 DEF)" }), fn((g, ctx, ev) => { const o = sel(ctx)[0]; const obj = g.jugadores[ctx.jugador].reciclaje.find((c) => c.uid === ctx.fuente); if (o && obj) M.equiparA(g, obj, o, ev, [{ defensa: 2 }]); })],
+      equipa: { objetivo: HUM, mods: [{ defensa: 2 }] },
+    },
+    "ENC-27": { alActivar: [fn((g, ctx, ev, yo) => { const n = M.cartasEnTablero(yo).some((c) => es(g, c, { tipo: "unidad", clase: "imperial" })) ? 6 : 4; g.equipos[yo.equipo].recursos.capital += n; ev.push({ tipo: "genera", equipo: yo.equipo, recursos: { capital: n } }); })] }, // Monedas
+    "ENC-28": { alBajar: [fn((g, ctx, ev, yo) => { const d = 1 + Math.floor(Math.random() * 6); g.equipos[yo.equipo].recursos.alimento += d; ev.push({ tipo: "dado", jugador: yo.asiento, valor: d }); ev.push({ tipo: "genera", equipo: yo.equipo, recursos: { alimento: d } }); })] }, // Barco Pesquero
+    "ENC-29": { // Cañón
+      usar: { etapas: ["nucleo1", "nucleo2", "batalla"], pasos: (g, ctx) => {
+        const yo = g.jugadores[ctx.jugador]; if (g.equipos[yo.equipo].recursos.capital < 3) return [];
+        return [elegir(T("tablero"), null, { titulo: "Cañón: paga 3 Capital y daña una carta" }), fn((gg, c) => { if (sel(c).length) gg.equipos[yo.equipo].recursos.capital -= 3; else c.pasos.length = 0; }),
+          opcion("¿Herida o contusión?", [["3 de Herida", [herirSel(3)]], ["3 de Contusión", [contSel(3)]]])];
+      } },
+    },
+    "ENC-31": { // Criadero de Chanchos
+      alBajar: [elegir(Y("campo"), { tipo: "unidad", especie: "animal" }, { max: 1, titulo: "Puedes regresar un Animal de tu tablero a tu mano" }), mover("mano")],
+      alDerrotar: (g, ctx, inst, extra) => { const n = (extra && extra.acuartelados) || 0; return n ? [ganar({ alimento: 2 * n })] : []; },
+    },
+    "ENC-36": { // Buer
+      alBajar: [opcion("Buer: elige", [
+        ["Hasta 2 Animales de tu mazo al tablero", [elegir(Y("principal"), { tipo: "unidad", especie: "animal" }, { max: 2 }), mover("colocar")]],
+        ["1 Suceso u Objeto de TIERRA u OSCURIDAD a tu mano", [elegir(Y("principal"), { tipo: ["suceso", "objeto"], elemento: ["tierra", "oscuridad"] }, { min: 1 }), mover("mano")]],
+      ])],
+    },
+    "ENC-38": { // Arcángel Miguel
+      aura: (g, f, jf, o, jo) => {
+        if (jo !== jf || !/[aá]ngel/i.test(carta(g, o).nombre || "")) return null;
+        let n = 0; for (const r of M.rivales(g, jf)) n += M.cartasEnTablero(r).filter((c) => es(g, c, { tipo: "unidad", sobrenatural: true, elemento: "oscuridad" })).length;
+        return n ? { ataque: n, defensa: n } : null;
+      },
+    },
+    "ENC-39": { // Duque Demoníaco Agares
+      alBajar: () => { const uno = opcion("Agares: genera 1 recurso", [["Alimento", [ganar({ alimento: 1 })]], ["Capital", [ganar({ capital: 1 })]], ["Creencia", [ganar({ creencia: 1 })]]]); return [uno, uno, uno]; },
+      aura: (g, f, jf, o) => { if (o !== f) return null; const n = M.cartasEnTablero(jf).filter((c) => c !== f && /demon/i.test(carta(g, c).nombre || "")).length; return n ? { ataque: n, defensa: n } : null; },
+    },
   };
-  return { cartas };
+  // Lealtad (X): al bajar esta carta, puedes bajar gratis hasta 2 cartas de tu mano con X en el nombre (o del elemento X)
+  const lealtad = (g, inst) => {
+    const x = String(carta(g, inst).lealtad || "").toLowerCase();
+    if (!x) return [];
+    const ok = (gg, c) => c !== inst && carta(gg, c).tipo === "unidad" && (String(carta(gg, c).nombre || "").toLowerCase().includes(x) || (carta(gg, c).elemento || []).includes(x));
+    return [elegir([Y("mano"), Y("sobrenatural")], { si: ok }, { max: 2, titulo: `Lealtad (${carta(g, inst).lealtad}): baja gratis hasta 2 cartas` }), bajarGratis()];
+  };
+  return { cartas, lealtad };
 };

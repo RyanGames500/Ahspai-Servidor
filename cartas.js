@@ -1542,3 +1542,6 @@ module.exports = {
   "sobrenatural": false
  }
 };
+
+// Las 37 cartas de los mazos de regalo (cartas_faltantes.js) se suman aquí, así todos las ven
+require("./cartas_faltantes.js");

@@ -746,5 +746,75 @@ prueba("mover un objeto equipado a otra carta (Guallcanga)", () => {
   igual(H.defensaDe(g, b), d0 + 5, "+5 DEF pasa a la segunda"); igual(b.pos, "def", "queda en defensa");
   igual(M.jugar(g, 0, { tipo: "desequipar", uid: gu.uid }).error, "ya_se_desequipo_este_turno", "1 vez por turno");
 });
+
+console.log("\nCartas nuevas de los mazos de regalo");
+prueba("mazos de regalo: listas exactas y mazo listo para jugar", () => {
+  const Rg = require("./regalo.js"), K = require("./cuentas.js");
+  for (const e of ["AHAHO", "ENCUENTRO"]) {
+    const col = Rg.coleccion(e, R);
+    igual(Object.keys(col).length, 40, e + " trae 40 cartas distintas");
+    igual(Object.keys(col).every((id) => R[id].expansion === e), true, e + " solo trae cartas de su expansión");
+    igual(K.mazoInicial(col).listo, true, e + " mazo listo");
+  }
+});
+prueba("Lariku: manda al Mausoleo una Común/Especial de ATK 3 o menos", () => {
+  const g = real(); ricos(g);
+  const v = poner(g, 1, "ENC-01", "batalla", 0, "atk");
+  const l = darMano(g, 0, "AHA-07");
+  ok(M.jugar(g, 0, { tipo: "bajar", uid: l.uid, desde: "mano", casilla: 0 }), "bajar");
+  ok(M.jugar(g, 0, { tipo: "elegir", uids: [v.uid] }), "elige");
+  igual(g.jugadores[1].mausoleo.includes(v), true, "al mausoleo");
+});
+prueba("Cerdos de Batalla: +3 ATK contra estructuras", () => {
+  const g = real();
+  const c = poner(g, 0, "ENC-08", "batalla", 0, "atk"); // ATK 3
+  const e = poner(g, 1, "AHA-15", "defensa", 0, "def"); e.mods = [{ ataque: 0, defensa: 6 - H.defensaDe(g, e), dura: "siempre" }]; // DEF 6
+  ok(M.jugar(g, 0, { tipo: "ir_batalla" }), "batalla");
+  ok(M.jugar(g, 0, { tipo: "atacar", uid: c.uid, objetivo: e.uid }), "ataca");
+  igual(g.jugadores[1].defensa[0], null, "3+3 tira la estructura de DEF 6");
+});
+prueba("Carlos I: al derrotar una Imperial gana 2 de Capital", () => {
+  const g = real();
+  const c = poner(g, 0, "ENC-09", "batalla", 0, "atk");
+  const v = poner(g, 1, "AHA-06", "batalla", 0, "atk"); // Willak Uma, imperial
+  const cap = g.equipos[g.jugadores[0].equipo].recursos.capital;
+  ok(M.jugar(g, 0, { tipo: "ir_batalla" }), "batalla");
+  ok(M.jugar(g, 0, { tipo: "atacar", uid: c.uid, objetivo: v.uid }), "ataca");
+  igual(g.equipos[g.jugadores[0].equipo].recursos.capital, cap + 2, "+2 capital");
+});
+prueba("Viejo Camac: sus víctimas dan solo 1 PV y luego pasa a defensa", () => {
+  const g = real();
+  const c = poner(g, 0, "AHA-02", "batalla", 0, "atk");
+  const v = poner(g, 1, "ENC-06", "batalla", 0, "atk"); v.mods = [{ ataque: -10, defensa: 0, dura: "siempre" }];
+  const pv0 = g.equipos[g.jugadores[0].equipo].pv;
+  ok(M.jugar(g, 0, { tipo: "ir_batalla" }), "batalla");
+  ok(M.jugar(g, 0, { tipo: "atacar", uid: c.uid, objetivo: v.uid }), "ataca");
+  igual(g.equipos[g.jugadores[0].equipo].pv, pv0 + 1, "solo 1 PV"); igual(c.pos, "def", "a defensa");
+});
+prueba("Lealtad (Carlos I): baja gratis cartas Conquistador de la mano", () => {
+  const g = real(); ricos(g);
+  const c = darMano(g, 0, "ENC-09"); const d = darMano(g, 0, "ENC-10"); const p2 = darMano(g, 0, "ENC-11");
+  ok(M.jugar(g, 0, { tipo: "bajar", uid: c.uid, desde: "mano", casilla: 0 }), "bajar Carlos");
+  if (!g.pendiente) throw new Error("no ofreció lealtad");
+  ok(M.jugar(g, 0, { tipo: "elegir", uids: [d.uid, p2.uid] }), "elige 2");
+  igual(H.cartasEnTablero(g.jugadores[0]).length, 3, "3 en el tablero de una");
+});
+prueba("Mama Cocha: requiere una Espiritista en tu tablero", () => {
+  const g = real(); ricos(g);
+  const m = { uid: g.sigUid++, carta: "AHA-35", dueno: 0, origen: "sobrenatural", pos: "atk", herida: 0, contusion: 0 }; g.jugadores[0].sobrenatural.push(m);
+  igual(M.jugar(g, 0, { tipo: "bajar", uid: m.uid, desde: "sobrenatural", casilla: 0 }).error, "falta_costo_extra", "sin espiritista no");
+  poner(g, 0, "AHA-08", "batalla", 1, "atk"); // Aclla de Mama Cocha (espiritista)
+  ok(M.jugar(g, 0, { tipo: "bajar", uid: m.uid, desde: "sobrenatural", casilla: 0 }), "con espiritista sí");
+});
+prueba("Trato con Mandinga: se paga sacrificando una Humana", () => {
+  const g = real(); ricos(g);
+  const sac = poner(g, 0, "ENC-06", "batalla", 0, "atk");
+  const v = poner(g, 1, "ENC-01", "batalla", 0, "atk");
+  const t = darMano(g, 0, "ENC-22");
+  ok(M.jugar(g, 0, { tipo: "activar", uid: t.uid }), "activar");
+  ok(M.jugar(g, 0, { tipo: "elegir", uids: [sac.uid] }), "sacrifica");
+  ok(M.jugar(g, 0, { tipo: "elegir", uids: [v.uid] }), "objetivo");
+  igual(g.jugadores[0].mausoleo.includes(sac) && g.jugadores[1].mausoleo.includes(v), true, "los dos al mausoleo");
+});
 console.log(`\n${pasaron} pasaron, ${fallaron} fallaron\n`);
 process.exit(fallaron ? 1 : 0);
