@@ -184,24 +184,9 @@ function coleccionInicial() {
 }
 // Colección de regalo de una cuenta nueva: el mazo elegido (2/2/1/1) + comunes del otro
 // mazo, de a una copia, solo las que hagan falta para llegar al mínimo de un mazo jugable.
+// Mazo de regalo: la lista EXACTA de cartas de regalo.js (AHAHO o ENCUENTRO)
 function coleccionRegalo(exp) {
-  const col = {};
-  for (const [id, c] of Object.entries(CARTAS)) {
-    if (c.expansion === exp) col[id] = COPIAS_REGALO[RAREZAS[id] || "comun"] || 1;
-  }
-  const otras = Object.keys(CARTAS)
-    .filter((id) => EXPANSIONES_INICIALES.includes(CARTAS[id].expansion) && CARTAS[id].expansion !== exp && (RAREZAS[id] || "comun") === "comun")
-    .sort();
-  for (let ronda = 0; ronda < 2; ronda++) {
-    for (const id of otras) {
-      const falta = motor.validarMazo(mazoInicial(col), CARTAS) || "";
-      if (!falta) return col;
-      const m = falta.match(/^mazo_(principal|sobrenatural|recursos)_\d+_debe_ser/);
-      if (!m || categoria(id) !== m[1] || (col[id] || 0) > ronda) continue;
-      col[id] = (col[id] || 0) + 1;
-    }
-  }
-  return col;
+  return require("./regalo.js").coleccion(exp, CARTAS);
 }
 function datosNuevos() {
   return {

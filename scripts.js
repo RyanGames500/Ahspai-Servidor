@@ -112,7 +112,7 @@ function ahspaiEnviarInicio(api, pid, asiento, modo) {
   api.sendTo(pid, "ahspai_inicio", { asiento, modo, total: claves.length });
   for (let i = 0; i < claves.length; i += 6) {
     const parte = {};
-    for (const k of claves.slice(i, i + 6)) parte[k] = CARTAS[k];
+    for (const k of claves.slice(i, i + 6)) parte[k] = { ...CARTAS[k], rareza: RAREZAS[k] || "comun" }; // la rareza decide si brilla (holográfica)
     api.sendTo(pid, "ahspai_cartas", { parte });
   }
 }

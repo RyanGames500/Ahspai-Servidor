@@ -63,11 +63,49 @@ module.exports = {
   "VP-05": "comun",
   "VP-02": "comun",
   "VP-14": "mitica",
-  "VP-10": "comun"
+  "VP-10": "comun",
+  // Cartas nuevas de los mazos de regalo (gema leída de su imagen, 16-nov-2026)
+  "AHA-10": "comun",
+  "AHA-08": "comun",
+  "ENC-38": "divina",
+  "ENC-28": "comun",
+  "ENC-36": "mitica",
+  "AHA-20": "comun",
+  "ENC-29": "comun",
+  "ENC-09": "legendaria",
+  "AHA-21": "comun",
+  "ENC-08": "comun",
+  "AHA-26": "comun",
+  "ENC-15": "comun",
+  "ENC-31": "comun",
+  "AHA-09": "comun",
+  "ENC-10": "comun",
+  "ENC-39": "mitica",
+  "ENC-16": "divina",
+  "ENC-13": "legendaria",
+  "AHA-24": "mitica",
+  "AHA-07": "comun",
+  "AHA-35": "divina",
+  "AHA-01": "legendaria",
+  "ENC-27": "comun",
+  "ENC-24": "comun",
+  "AHA-36": "divina",
+  "AHA-12": "comun",
+  "ENC-11": "comun",
+  "ENC-18": "comun",
+  "ENC-25": "comun",
+  "AHA-03": "comun",
+  "AHA-29": "comun",
+  "ENC-23": "legendaria",
+  "ENC-21": "comun",
+  "ENC-22": "mitica",
+  "AHA-38": "legendaria",
+  "AHA-02": "legendaria",
+  "AHA-14": "comun"
 };
 
 // Arreglo de los mazos de regalo (13-nov-2026): cuentas.js es muy grande para editarlo entero,
 // así que el parche se activa desde aquí (cuentas.js siempre carga este archivo).
 // Envuelve cuentas.elegirMazo para que la colección quede con la lista EXACTA de regalo.js
 // (antes regalaba por rareza y rellenaba con comunes del otro mazo).
-require("./regalo.js").instalar();
+// (El parche ya no hace falta: cuentas.js usa regalo.js directo en coleccionRegalo.)
